@@ -26,6 +26,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   #root { min-height: 100vh; }
@@ -134,6 +137,112 @@ function mapsCoordUrl(lat, lng) {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
 }
 
+function buildReportNode(n, detail) {
+  const wrap = document.createElement("div");
+  wrap.style.cssText =
+    "width:800px;background:#FBF9F2;font-family:'Inter',sans-serif;color:#26241C;padding:32px;box-sizing:border-box;";
+
+  const headerHtml = `
+    <div style="display:flex;align-items:center;gap:16px;border-bottom:3px double #8A6A2F;padding-bottom:16px;margin-bottom:20px;">
+      <div style="width:50px;height:50px;border-radius:50%;border:2px solid #C6A75A;display:flex;align-items:center;justify-content:center;font-family:'Spectral',serif;font-weight:700;font-size:16px;color:#8A6A2F;">BK</div>
+      <div>
+        <div style="font-family:'Spectral',serif;font-weight:700;font-size:22px;color:#232A22;">Laporan Kunjungan Nasabah</div>
+        <div style="font-size:12px;color:#7A7660;">Dicetak ${formatTanggal(todayStr())}</div>
+      </div>
+    </div>
+  `;
+
+  const infoHtml = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 24px;margin-bottom:20px;font-size:13px;">
+      <div><b>Nomor Anggota</b><br/>${n.nomor || "-"}</div>
+      <div><b>Nama</b><br/>${n.nama}</div>
+      <div><b>Rek. Simpanan</b><br/>${n.rekSimpanan || "-"}</div>
+      <div><b>Rek. Pembiayaan</b><br/>${n.rekPembiayaan || "-"}</div>
+      <div><b>AO / Petugas</b><br/>${n.ao || "-"}</div>
+      <div><b>No. WhatsApp</b><br/>${n.noWa || "-"}</div>
+      <div style="grid-column:1/3;"><b>Alamat</b><br/>${n.alamat || "-"}</div>
+    </div>
+  `;
+
+  wrap.innerHTML = headerHtml + infoHtml;
+
+  if (n.alamat && window.QRCode) {
+    const qrSection = document.createElement("div");
+    qrSection.style.cssText =
+      "display:flex;align-items:center;gap:16px;margin-bottom:24px;padding:14px;background:#F0E6CC;border:1px solid #DCC98F;border-radius:8px;";
+    const qrDiv = document.createElement("div");
+    qrSection.appendChild(qrDiv);
+    const qrLabel = document.createElement("div");
+    qrLabel.style.cssText = "font-size:12px;color:#5B5745;";
+    qrLabel.innerHTML = "<b>Scan untuk lokasi alamat</b><br/>" + n.alamat;
+    qrSection.appendChild(qrLabel);
+    wrap.appendChild(qrSection);
+    new window.QRCode(qrDiv, { text: mapsAddressUrl(n.alamat), width: 90, height: 90, correctLevel: window.QRCode.CorrectLevel.M });
+  }
+
+  const ledgerTitle = document.createElement("div");
+  ledgerTitle.style.cssText =
+    "font-family:'Spectral',serif;font-size:16px;font-weight:700;border-top:1px dashed #DCD5BC;padding-top:16px;margin-bottom:12px;";
+  ledgerTitle.textContent = `Riwayat Kunjungan (${detail.kunjungan.length}x)`;
+  wrap.appendChild(ledgerTitle);
+
+  if (detail.kunjungan.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:13px;color:#9C9680;font-style:italic;";
+    empty.textContent = "Belum ada kunjungan tercatat.";
+    wrap.appendChild(empty);
+  } else {
+    detail.kunjungan.forEach((v, idx) => {
+      const item = document.createElement("div");
+      item.style.cssText = "margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #E4DEC7;";
+
+      let photosHtml = "";
+      if (v.photos && v.photos.length) {
+        photosHtml =
+          `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">` +
+          v.photos
+            .map(
+              (p) =>
+                `<img src="${p}" style="width:110px;height:110px;object-fit:cover;border-radius:6px;border:1px solid #DCD5BC;" />`
+            )
+            .join("") +
+          `</div>`;
+      }
+
+      item.innerHTML = `
+        <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:#3A3728;">
+          <span>Kunjungan ${ordinalLabel(idx + 1)}</span>
+          <span style="color:#9C9680;font-family:'JetBrains Mono',monospace;font-weight:400;">${formatTanggal(v.tanggal)}</span>
+        </div>
+        <div style="font-size:13px;color:#4A4736;margin-top:5px;white-space:pre-wrap;">${v.hasil}</div>
+        ${photosHtml}
+      `;
+
+      wrap.appendChild(item);
+
+      if (v.location && window.QRCode) {
+        const locWrap = document.createElement("div");
+        locWrap.style.cssText = "display:flex;align-items:center;gap:10px;margin-top:8px;";
+        const qrDiv2 = document.createElement("div");
+        const locLabel = document.createElement("div");
+        locLabel.style.cssText = "font-size:11px;color:#2F6E63;";
+        locLabel.innerHTML = `Scan lokasi kunjungan<br/>(${v.location.lat.toFixed(5)}, ${v.location.lng.toFixed(5)})`;
+        locWrap.appendChild(qrDiv2);
+        locWrap.appendChild(locLabel);
+        item.appendChild(locWrap);
+        new window.QRCode(qrDiv2, {
+          text: mapsCoordUrl(v.location.lat, v.location.lng),
+          width: 64,
+          height: 64,
+          correctLevel: window.QRCode.CorrectLevel.M,
+        });
+      }
+    });
+  }
+
+  return wrap;
+}
+
 const DEFAULT_MAP_CENTER = [-6.9068, 109.9128]; // Kab. Batang
 
 const SEED_NASABAH = [{"nama": "ABDUL AYIS SUTRISNO", "rekSimpanan": "211052004008", "rekPembiayaan": "541052003094", "alamat": "DK. DURENSARI RT 04/03 DS. DURENOMBO KEC. SUBAH BATANG"}, {"nama": "ACHMAD MUNTALIB", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK.BANGUNSARI RT 04/01 DS.REJOSARI TIMUR TERSONO"}, {"nama": "ADAM DUTA MARZURI", "rekSimpanan": "211052002212", "rekPembiayaan": "541052003126", "alamat": "DK. GEDONGAN RT 01/01 DS. REJOSARI BARAT KEC.TERSONO BATANG"}, {"nama": "AGUS SLAMET", "rekSimpanan": "211052004284", "rekPembiayaan": "551052001946", "alamat": "DK. AMPEL WULUNG RT 11/06 DS. SENDANG KEC. TERSONO BATANG"}, {"nama": "AGUS SURYANTO", "rekSimpanan": "211052002280", "rekPembiayaan": "544052000390", "alamat": "DK. KAUMAN RT. 04/03 DS. TERSONO BATANG"}, {"nama": "AHMAD JOHARI", "rekSimpanan": "211052003701", "rekPembiayaan": "551052001952", "alamat": "DK.LIMBANGAN RT.01/02 DS.REJOSARIBARAT - TERSONO"}, {"nama": "AHMAD KHAFIDIN", "rekSimpanan": "211052003846", "rekPembiayaan": "541052003110", "alamat": "DK.SENDANG RT.03/02 DS.SENDANG - TERSONO"}, {"nama": "AHMAD NASIRIN", "rekSimpanan": "211052002700", "rekPembiayaan": "551052001940", "alamat": "DS.REJOSARI BART RT 03/01.TERSONO"}, {"nama": "AHMAD RIZKI", "rekSimpanan": "211052002745", "rekPembiayaan": "541052002731", "alamat": "DK. REJOSARI RT 08/04 DS. SENDANG TERSONO"}, {"nama": "AHMAD RIZKI MAGHFUR", "rekSimpanan": "211052004427", "rekPembiayaan": "541052003150", "alamat": "DK. SENDANG RT 01/01 DS. SENDANG KEC.TERSONO BATANG"}, {"nama": "AHMAD SATRIA", "rekSimpanan": "211052004000", "rekPembiayaan": "541052002822", "alamat": "DK. BANTENG RT 03/01 DS. BANTENG KEC. TERSONO BATANG"}, {"nama": "AHMAD SOBIRIN", "rekSimpanan": "211052001647", "rekPembiayaan": "541052003087", "alamat": "DK PANDEK RT 03/06 DS KARANGTENGAH SUBAH BATANG"}, {"nama": "AHMAD TOKHIR", "rekSimpanan": "211052001909", "rekPembiayaan": "541052002991", "alamat": "DK. LIMBANGAN RT. 01/02 REJOSARI BARAT TERSONO"}, {"nama": "AHMAD WAHIDIN", "rekSimpanan": "211052002274", "rekPembiayaan": "551052001534", "alamat": "DK. SUKOREJO RT. 02/02 SUKOREJO LIMPUNG"}, {"nama": "AKH. FAOZAN", "rekSimpanan": "211052003557", "rekPembiayaan": "541052002703", "alamat": "DK.SOKOSAWIT RT.01/07 DS.AMONGROGO - LIMPUNG"}, {"nama": "AKMALIYAH", "rekSimpanan": "211052004049", "rekPembiayaan": "551052001956", "alamat": "DK.TEMPURAN RT.02/02 DS.HARJOWINANGUN BARAT - TERSONO"}, {"nama": "ALFA KHOIRINA", "rekSimpanan": "211052004410", "rekPembiayaan": "541052003122", "alamat": "DK.GEDONGAN RT 04/01 DS.REJOSARI BARAT KEC.TERSONO BATANG"}, {"nama": "ALI MASYKUR", "rekSimpanan": "211052003838", "rekPembiayaan": "541052002896", "alamat": "DK.DLISEN RT.02/01 DS.DLISEN - LIMPUNG"}, {"nama": "ALI MURTADLO", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK. SIGUCI RT. 01/01 DS. SIGUCI KEC. PECALUNGAN KAB. BATANG"}, {"nama": "AMIN SUBKHAN", "rekSimpanan": "211052003653", "rekPembiayaan": "541052003133", "alamat": "DK.PLUMBON RT.04/01 DS.PLUMBON - LIMPUNG"}, {"nama": "ANDRY HENDRATNO", "rekSimpanan": "211052001731", "rekPembiayaan": "541052002963", "alamat": "DK. KRANGKOAN RT 04/02 DS NGALIYAN LIMPUNG"}, {"nama": "ANI MURDIYANI", "rekSimpanan": "211052004016", "rekPembiayaan": "541052002847", "alamat": "DK.GEDONGAN RT.03/01 DS.REJOSARIBARAT - TERSONO"}, {"nama": "ANIK ERMAWATI", "rekSimpanan": "211052004062", "rekPembiayaan": "551052001767", "alamat": "DK.GENTAN RT.02/02 DS.KALANGSONO - BANYUPUTIH"}, {"nama": "ANTONO", "rekSimpanan": "211052000919", "rekPembiayaan": "541052000544", "alamat": "DS BANDAR RT 02/05 BANDAR BATANG"}, {"nama": "APRILIYANTI", "rekSimpanan": "211052003848", "rekPembiayaan": "541052002979", "alamat": "DK.SEMPU RT.01/03 DS.SEMPU-KEC.LIMPUNG"}, {"nama": "ARI ROSIANA", "rekSimpanan": "211052004258", "rekPembiayaan": "541052003008", "alamat": "DK. KAUMAN RT 03/03 DS. TERSONO KEC. TERSONO BATANG"}, {"nama": "ARIF MUSTOFA", "rekSimpanan": "211052002799", "rekPembiayaan": "541052003089", "alamat": "DK. GEDONGAN RT. 03/01 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "ARIF USMANTO", "rekSimpanan": "211052004301", "rekPembiayaan": "541052003050", "alamat": "DK. RECO RT 17/03 DS. GUNUNGSARI KEC. BAWANG BATANG"}, {"nama": "ARIPIN", "rekSimpanan": "211052000106", "rekPembiayaan": "551052001941", "alamat": "KebonpetungRT/RW. 06/02 Rejosari Barat Tersono Batang"}, {"nama": "ASIAH", "rekSimpanan": "211052001800", "rekPembiayaan": "551052001948", "alamat": "DK. KWANGSANG RT. 01/05 AMONGROGO LIMPUNG"}, {"nama": "ASLAKHUL ARIFIN", "rekSimpanan": "211052003985", "rekPembiayaan": "541052003057", "alamat": "DK.GUNUNG TUMPENG RT.03/02 DS.DLISEN - LIMPUNG"}, {"nama": "ASMAWI", "rekSimpanan": "211052003007", "rekPembiayaan": "541052002706", "alamat": "DK. GEDONG RT. 09/03 DS. TIMBANG KEC. BANYUPUTIH KAB. BATANG"}, {"nama": "ASRO", "rekSimpanan": "211052000222", "rekPembiayaan": "541052003088", "alamat": "DK GEDONGAN RT04/01 REJOSARI BARAT TERSONO"}, {"nama": "ASTUTI", "rekSimpanan": "211052004321", "rekPembiayaan": "551052001914", "alamat": "DK. KAUM RT. 02/01 DS. KEBUMEN KEC. TERSONO KAB. BATANG"}, {"nama": "BAHRI", "rekSimpanan": "211052000397", "rekPembiayaan": "541052003007", "alamat": "DK, LIMBANGAN RT 03/02 REJOSARI BARAT ,TERSONO"}, {"nama": "BAMBANG SUGIARTO", "rekSimpanan": "211052001203", "rekPembiayaan": "541052003084", "alamat": "DK.SENER RT 02/08 KRANGGAN.TERSONO"}, {"nama": "BAMBANG SUSANTO", "rekSimpanan": "211052004232", "rekPembiayaan": "541052002984", "alamat": "DK. TIMBANG RT. 08/03 DS. TIMBANG KEC. BANYUPUTIH KAB. BATANG"}, {"nama": "BARIYAH", "rekSimpanan": "211052002588", "rekPembiayaan": "541052002826", "alamat": "DK. DURENSARI RT. 04/03 DS. DURENOMBO KEC. SUBAH KAB. BATANG"}, {"nama": "BAWON", "rekSimpanan": "211052000335", "rekPembiayaan": "551052001525", "alamat": "DK. GEDONGAN RT 01/01 REJOSARI BARAT, TERSONO"}, {"nama": "BUNASIR", "rekSimpanan": "211052004257", "rekPembiayaan": "541052003113", "alamat": "DK. SENDANG RT 04/02 DS. SENDANG KEC. TERSONO BATANG"}, {"nama": "CAHYANTO", "rekSimpanan": "211052004429", "rekPembiayaan": "541052003151", "alamat": "DK.BABADAN RT 05/03 DS.BABADAN KEC.LIMPUNG BATANG"}, {"nama": "DASMONO", "rekSimpanan": "211052004009", "rekPembiayaan": "541052003098", "alamat": "DK. DURENSARI RT 04/03 DS. DUREN OMBO KEC. SUBAH BATANG"}, {"nama": "DENI SUSANTI", "rekSimpanan": "211052000720", "rekPembiayaan": "541052003012", "alamat": "DK. KAUMAN RT 01/03 TERSONO, TERSONO"}, {"nama": "DEVI DWI ANGGRAENI", "rekSimpanan": "211052004246", "rekPembiayaan": "541052003077", "alamat": "DK. GEPOR RT 03/03 DS. LIMPUNG KEC. LIMPUNG BATANG"}, {"nama": "DIAH HUSNA ARIFAH", "rekSimpanan": "211052003626", "rekPembiayaan": "541052002898", "alamat": "DK.WATES RT01/06 DS.KRANGGAN - TERSONO"}, {"nama": "DIAN NOVISANTI", "rekSimpanan": "211052002256", "rekPembiayaan": "551052001944", "alamat": "DK. PEJATEN RT. 02/03 REJOSARI BARAT TERSONO"}, {"nama": "DIMAS RIZKY PUTRA SULISTIO", "rekSimpanan": "211052004068", "rekPembiayaan": "541052002955", "alamat": "DK.SENDANG RT.01/01 DS.SENDANG - TERSONO"}, {"nama": "DIMAS WAHYU RANGGA PRADANA", "rekSimpanan": "211052004053", "rekPembiayaan": "541052002889", "alamat": "DK.SENDANG RT.05/03 DS.SENDANG - TERSONO"}, {"nama": "DJUNED DJANSITA", "rekSimpanan": "211052003865", "rekPembiayaan": "541052003048", "alamat": "DK.KARANGBOYO RT.07/01 DS.TANJUNGSARI - TERSONO"}, {"nama": "EKO HARYANTO", "rekSimpanan": "211052003871", "rekPembiayaan": "541052002733", "alamat": "DK.SENDANG RT.02/01 DS.SENDANG - TERSONO"}, {"nama": "EKO PRATIKNO", "rekSimpanan": "211052004030", "rekPembiayaan": "551052001731", "alamat": "DK.SIDOMULYO RT.01/01 DS.SIDOMULYO - LIMPUNG"}, {"nama": "EKO SANTOSO", "rekSimpanan": "211052002806", "rekPembiayaan": "541052001721", "alamat": "DK. KAUMAN RT. 01/03 DS. TERSONO KEC. TERSONO KAB. BATANG"}, {"nama": "EMA LUTFIA KURNIAWATI", "rekSimpanan": "211052002766", "rekPembiayaan": "541052002871", "alamat": "DK. GEDONGAN RT. 06/01 DS. DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "ENDANG PUJI ASTUTI", "rekSimpanan": "211052000174", "rekPembiayaan": "541052003146", "alamat": "DK LIMPUNG RT 03/02 BATANG"}, {"nama": "ERIK YUVENALIS SISWANDI", "rekSimpanan": "211052001870", "rekPembiayaan": "541052001384", "alamat": "DK. GEPOR RT 04/03 DS. LIMPUNG LIMPUNG"}, {"nama": "ERNI ISNAINI", "rekSimpanan": "211052003518", "rekPembiayaan": "551052001955", "alamat": "DK.KALISALAK RT.03/01 DS.KALISALAK LEC.LIMPUNG KAB.BATANG"}, {"nama": "ERWIN SUGIARNI, S.PD", "rekSimpanan": "211052000847", "rekPembiayaan": "541052002907", "alamat": "DK. GEDONGAN RT 03/01 DS.REJOSARI BARAT TERSON"}, {"nama": "EVA NOFIANA", "rekSimpanan": "211052003442", "rekPembiayaan": "541052003107", "alamat": "DK. LIMBANGAN RT. 02/02 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "FAHRUDIN", "rekSimpanan": "211052004325", "rekPembiayaan": "541052003093", "alamat": "DK. SENDANG RT. 01/01 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "FATKHUL MUBIN", "rekSimpanan": "211052001655", "rekPembiayaan": "541052002957", "alamat": "DK. LIMBANGAN RT. 01/02 REJOSARI BARAT TERSONO"}, {"nama": "FATONAH", "rekSimpanan": "211052004256", "rekPembiayaan": "541052003004", "alamat": "DK. LOBANG RT 03/01 DS. LOBANG KEC. LIMPUNG BATANG"}, {"nama": "FENI YULISTIANI", "rekSimpanan": "211052003868", "rekPembiayaan": "551052001646", "alamat": "DK.KEBANGGAN RT.05/03 DS.SENDANG - TERSONO"}, {"nama": "FERI DEWI SUSANTI", "rekSimpanan": "211052002268", "rekPembiayaan": "541052003071", "alamat": "DK. PETAMANAN RT. 04/03 BANYUPUTIH BATANG"}, {"nama": "FIKI RISKIANTO", "rekSimpanan": "211052002566", "rekPembiayaan": "544052000736", "alamat": "DK. SEMPU RT. 01/03 DS. SEMPU KEC. LIMPUNG, BATANG"}, {"nama": "FINA SAFITRI", "rekSimpanan": "211052004225", "rekPembiayaan": "541052002980", "alamat": "DK. KAUM RT. 04/01 DS. KEBUMEN KEC. TERSONO KAB. BATANG"}, {"nama": "FITRIANI", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK.TIMBANG RT.04/01 DS.TIMBANG - BANYUPUTIH"}, {"nama": "FITRIYAH", "rekSimpanan": "211052002878", "rekPembiayaan": "541052003140", "alamat": "DK.SENER RT 02/08 DS.KRANGGAN KEC.TERSONO BATANG"}, {"nama": "GALVIN ADI SAPUTRA", "rekSimpanan": "211052003285", "rekPembiayaan": "541052002976", "alamat": "DK. GEDONGAN RT. 01/01 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "GATRA IMAM ARIFIYANTO", "rekSimpanan": "211052000856", "rekPembiayaan": "541052002701", "alamat": "DK. GEDONGAN RT 01/01 DS. REJOSARI BARAT TERSONO"}, {"nama": "GIYONO", "rekSimpanan": "211052004296", "rekPembiayaan": "551052001929", "alamat": "DK. SUKOREJO RT 04/01 DS. SUKOREJO KEC. LIMPUNG BATANG"}, {"nama": "H DULJALIL", "rekSimpanan": "211052000154", "rekPembiayaan": "541052000929", "alamat": "Condong TambahrejoRT/RW. 03/02 Tambahrejo Bandar Batang"}, {"nama": "HADI SUSILO", "rekSimpanan": "111052000007", "rekPembiayaan": "", "alamat": "LimbanganRT/RW. 004/0 Rejosari barat Tersono Batang"}, {"nama": "HARMANTO", "rekSimpanan": "211052002139", "rekPembiayaan": "541052003104", "alamat": "DK. KAYEN RT 02/01 DS. KALIBALIK BANYUPUTIH"}, {"nama": "HARTATIK", "rekSimpanan": "211052003278", "rekPembiayaan": "541052002998", "alamat": "DK. BANTENG RT. 03/01 DS. BANTENG KEC. TERSONO KAB. BATANG"}, {"nama": "HENI APRILIA ROHMAWATI", "rekSimpanan": "211052003478", "rekPembiayaan": "541052003106", "alamat": "DK. LIMBANGNA RT 05/ 02 DS. REJOSARI BARAT KEC. TERSONO BATANG"}, {"nama": "HERI SEPTIAWAN", "rekSimpanan": "211052003775", "rekPembiayaan": "541052002986", "alamat": "DK.CEKELAN RT.07/02 DS.PENUNDAN - BANYUPUTIH"}, {"nama": "IGA BRIAN MAYASARI", "rekSimpanan": "211052003724", "rekPembiayaan": "541052003141", "alamat": "DK. GEPOR RT 01/03 DS. LIMPUNG KEC. LIMPUNG KAB. BATANG"}, {"nama": "IIS ERNAWATI", "rekSimpanan": "211052004406", "rekPembiayaan": "551052001943", "alamat": "DK.TABELAN RT 04/01 DS.GUMAWANG KEC.PECALUNGAN BATANG"}, {"nama": "ILHAM IBNU UBADILAH", "rekSimpanan": "211052004381", "rekPembiayaan": "551052001954", "alamat": "SIDONGKAL RT 09/04 DS.GERLANG KEC.BLADO BATANG"}, {"nama": "IMAM SYARONI", "rekSimpanan": "211052004250", "rekPembiayaan": "541052002997", "alamat": "DK. GUMELEM RT 11/03 DS. GUMAWANG KEC. PECALUNGAN BATANG"}, {"nama": "INDAH ROZATI", "rekSimpanan": "211052003817", "rekPembiayaan": "541052003101", "alamat": "DK.AMPELSARI RT.09/04 DS.SENDANG - TERSONO"}, {"nama": "IRWANTO", "rekSimpanan": "211052000486", "rekPembiayaan": "541052000239", "alamat": "DK. PUCANGGADING UTARA RT 03/03 PUCANGGADING, BANDAR"}, {"nama": "ISLAHUL KHIKAM", "rekSimpanan": "211052000439", "rekPembiayaan": "541052000210", "alamat": "PUCANGGADING TIMUR RT01/01 BANDAR"}, {"nama": "ISTIKHAROH", "rekSimpanan": "211052002935", "rekPembiayaan": "541052003147", "alamat": "DK. SIKEBO RT. 01/04 DS. LIMPUNG KEC. LIMPUNG KAB. BATANG"}, {"nama": "ISTIKHOMAH", "rekSimpanan": "211052004104", "rekPembiayaan": "541052002936", "alamat": "DK. PEKUNCEN RT. 03/02 DS. REJOSARI TIMUR KEC. TERSONO KAB. BATANG"}, {"nama": "ISTIKOWATI", "rekSimpanan": "211052000745", "rekPembiayaan": "541052002776", "alamat": "BABADAN RT 02/03 BABADAN, LIMPUNG"}, {"nama": "JAWAN", "rekSimpanan": "211052003973", "rekPembiayaan": "551052001836", "alamat": "DK.BANTARAN RT.018/05 DS.KETANGGAN - GRINGSING"}, {"nama": "JIHAN MAULANA YUSUF", "rekSimpanan": "211052003801", "rekPembiayaan": "541052002897", "alamat": "DK.KAUMAN RT.03/03 DS.TERSONO - TERSONO"}, {"nama": "JUMAHAR", "rekSimpanan": "211052001493", "rekPembiayaan": "541052002455", "alamat": "CANDI GUGUR RT 04/01 DS. CANDI GUGUR BAWANG"}, {"nama": "JUMIATI", "rekSimpanan": "211052002881", "rekPembiayaan": "541052002245", "alamat": "DK. PAKIS RT. 03/01 DS. HARJOWINANGUN TIMUR KEC. TERSONO KAB. BATANG"}, {"nama": "JURIYAH", "rekSimpanan": "211052003888", "rekPembiayaan": "541052002757", "alamat": "DK.KRAJAN2 RT.01/04 DS.TENGGULANGHARJO - SUBAH"}, {"nama": "KADARI", "rekSimpanan": "211052000387", "rekPembiayaan": "541052000889", "alamat": "SIGUCI PECALUNGAN RT 03/01"}, {"nama": "KARNO", "rekSimpanan": "211052001413", "rekPembiayaan": "541052002797", "alamat": "DK. SIDOKERSO RT 01/05 DS. TENGGALUNGHARJO SUBAH"}, {"nama": "KARSIYAH", "rekSimpanan": "211052002728", "rekPembiayaan": "541052003130", "alamat": "DK. SENDANG RT. 01/01 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "KARYONO", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK. SIGUCI RT. 01/01 DS. SIGUCI KEC. PECALUNGAN"}, {"nama": "KHAERON", "rekSimpanan": "211052002644", "rekPembiayaan": "541052003117", "alamat": "DK. REJOSARI RT. 07/04 DS. SENDANG KEC. TERSONO"}, {"nama": "KHAERUDIN", "rekSimpanan": "211052001472", "rekPembiayaan": "551052001734", "alamat": "DK. KEBANGGAN RT 05/03 DS. SENDANG TERSONO"}, {"nama": "KHAIRUDIN", "rekSimpanan": "211052000098", "rekPembiayaan": "551052001089", "alamat": "LengganganRT/RW. 005/0 Sukorejo Limpung Batang"}, {"nama": "KHOIRUDIN", "rekSimpanan": "211052100031", "rekPembiayaan": "541052000201", "alamat": "PUCANGGADINGRT/RW. 007/004  BANDAR BATANG"}, {"nama": "KHOIRUL ANAM", "rekSimpanan": "211052004421", "rekPembiayaan": "541052003138", "alamat": "DK. WATULEMBU RT 11/05 DS. GERLANG KEC. BLADO BATANG"}, {"nama": "KHOIRUL KIROM", "rekSimpanan": "111052000017", "rekPembiayaan": "", "alamat": "DK. KALIBALIK RT. 03/03 DS. KALIBALIK KEC. BANYUPUTIH KAB. BATANG"}, {"nama": "KHOLIPAH", "rekSimpanan": "211052004334", "rekPembiayaan": "551052001930", "alamat": "DK. DURENSARI RT 02/03 DS. DURENOMBO KEC. SUBAH BATANG"}, {"nama": "KHOMSATUN", "rekSimpanan": "211052000311", "rekPembiayaan": "551052000142", "alamat": "DK WRAGE RT03/04/TAMBAHREJO BANDAR"}, {"nama": "KHONITI", "rekSimpanan": "211052000418", "rekPembiayaan": "541052002912", "alamat": "DK KALENGGANGAN RT05/02 DS SUKOREJO LIMPUNG"}, {"nama": "KHUMAEDI", "rekSimpanan": "211052001479", "rekPembiayaan": "541052003123", "alamat": "DK. LIMBANGAN RT 04/02 DS. REJOSARI BARAT TERSONO"}, {"nama": "KHUMAIYAH", "rekSimpanan": "211052000364", "rekPembiayaan": "541052003068", "alamat": "DK LIMPUNG, RT/RW 03/02"}, {"nama": "KHUSAENI", "rekSimpanan": "211052003790", "rekPembiayaan": "541052002952", "alamat": "DK. LIMBANGAN RT 03/02 DS. REJOSARI BARAT KEC. TERSONO BATANG"}, {"nama": "KOMARIYAH", "rekSimpanan": "211052003146", "rekPembiayaan": "541052002585", "alamat": "KOMP. AL AZHAR NO.1 RT. 02/01 DS. KAMPUNG PELITA KEC. LUBUK BAJA KAB. BATAM"}, {"nama": "KOMARUDIN", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK.TIMBANG RT.04/01 DS.TIMBANG - BANYUPUTIH"}, {"nama": "KUS RAHAYU", "rekSimpanan": "211052001265", "rekPembiayaan": "551052000823", "alamat": "DK LIMPUNGM RT 04/02 BATANG"}, {"nama": "KUSIYAH", "rekSimpanan": "211052000278", "rekPembiayaan": "541052003082", "alamat": "DK. LIMBANGAN RT 03/02 REJOSARI BARAT, TERSONO"}, {"nama": "KUSRINTO", "rekSimpanan": "211052000389", "rekPembiayaan": "541052002915", "alamat": "MILUWUNG RT 01/03 REJOSARI BARAT.TERSONO"}, {"nama": "KUSTIANI", "rekSimpanan": "211052001780", "rekPembiayaan": "541052003002", "alamat": "DK. BANTENG RT 03/01 DS. BANTENG TERSONO"}, {"nama": "KUSTINI", "rekSimpanan": "211052004138", "rekPembiayaan": "541052002954", "alamat": "DK. SENDANG RT. 02/01 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "KUSTIYAH", "rekSimpanan": "211052003619", "rekPembiayaan": "541052002779", "alamat": "DK.KALISALAK RT.02/01 DS.KALISALAK - LIMPUNG"}, {"nama": "KUWATI", "rekSimpanan": "211052003802", "rekPembiayaan": "541052002630", "alamat": "DK.SENDANG RT.02/01 DS.SENDANG - TERSONO"}, {"nama": "LAILATUN NAFI'AH", "rekSimpanan": "211052002536", "rekPembiayaan": "541052002707", "alamat": "DK. KEDAWUNG RT. 02/01 DS. KEDAWUNG BANYUPUTIH"}, {"nama": "LEZA MAULIDINA SALMA", "rekSimpanan": "211052004022", "rekPembiayaan": "541052003118", "alamat": "DK.LIMPUNG RT.01/03 DK.LIMPUNG - LIMPUNG"}, {"nama": "LILIK SUSANTO", "rekSimpanan": "211052002675", "rekPembiayaan": "541052003131", "alamat": "JL. JENDRAL SUDIRMAN RT. 04/02 DS. LIMPUNG KEC. LIMPUNG KAB.BATANG"}, {"nama": "LISYANTI", "rekSimpanan": "211052002042", "rekPembiayaan": "541052003149", "alamat": "DK. BABADAN RT 01/01 DS. BABADAN LIMPUNG"}, {"nama": "LUFNI HIDAYAT", "rekSimpanan": "211052002338", "rekPembiayaan": "544052000324", "alamat": "DS. KALIBALIK RT. 02/02 DS. KALIBALIK BANYUPUTIH"}, {"nama": "LUKMAN HAKIM", "rekSimpanan": "111052000019", "rekPembiayaan": "", "alamat": "DK. PLUMBON RT. 05/01 DS. PLUMBON KEC. LIMPUNG KAB. BATANG"}, {"nama": "LUSIANA", "rekSimpanan": "211052002610", "rekPembiayaan": "541052001549", "alamat": "DK. PAGOTAN RT. 01/03 DS. KALISALAK KEC. LIMPUNG KAB. BATANG"}, {"nama": "MAHFUDIN", "rekSimpanan": "211052000173", "rekPembiayaan": "541052000455", "alamat": "PUCANGGADING RT03/05 BANDAR"}, {"nama": "MAHYUN", "rekSimpanan": "211052001425", "rekPembiayaan": "541052001345", "alamat": "DK.KEBANGGAN RT 06/03 SENDANG TERSONO"}, {"nama": "MAIMANAH", "rekSimpanan": "211052004079", "rekPembiayaan": "551052001783", "alamat": "DK. GETAS RT 01/01 DS. GETAS KEC. BAWANG BATANG"}, {"nama": "MALIKHAH", "rekSimpanan": "211052002510", "rekPembiayaan": "551052001216", "alamat": "DK. MENTOSARI RT. 07/02 DS. MENTOSARI GRINGSING"}, {"nama": "MARWAN", "rekSimpanan": "211052001505", "rekPembiayaan": "541052000927", "alamat": "DK.TEMPURAN RT 04/02DS. HARJOWINANGUN BARAT TERSONO"}, {"nama": "MASHURI", "rekSimpanan": "211052001601", "rekPembiayaan": "541052003145", "alamat": "DK.BRAJAN RT 01/01 DS.KEPUH LIMPUNG"}, {"nama": "MEI DWI ARIS SETIA", "rekSimpanan": "211052004143", "rekPembiayaan": "541052002961", "alamat": "DK. JETIS RT. 01/02 DS. LOBANG KEC. LIMPUNG KAB. BATANG"}, {"nama": "MEY KURNIAWATI", "rekSimpanan": "211052001817", "rekPembiayaan": "541052002716", "alamat": "DK. SIDOMULYO RT 01/01 DS. SIDOMULYO LIMPUNG BATANG"}, {"nama": "MIATI", "rekSimpanan": "211052003803", "rekPembiayaan": "541052002631", "alamat": "DK.SENDANG RT.01/01 DS.SENDANG -TERSONO"}, {"nama": "MISBAHUL MUNIR", "rekSimpanan": "211052002261", "rekPembiayaan": "541052003095", "alamat": "DK. LIMBANGAN RT. 04/01 REJOSARI BARAT TERSONO"}, {"nama": "MISRO", "rekSimpanan": "211052004306", "rekPembiayaan": "541052003064", "alamat": "DK. KESANEN RT. 07/03 DS. GONDO KEC. TERSONO KAB. BATANG"}, {"nama": "MISTIATI", "rekSimpanan": "211052003718", "rekPembiayaan": "541052003074", "alamat": "DK.DURENSARI RT.02/03 DS.DURENOMBO - SUBAH"}, {"nama": "MISTIYAH", "rekSimpanan": "211052003613", "rekPembiayaan": "541052003103", "alamat": "DK.DURENSARI RT.01/03 DS.DURENOMBO - SUBAH"}, {"nama": "MISWANTO", "rekSimpanan": "211052004160", "rekPembiayaan": "551052001821", "alamat": "DK. KEBON PETUNG RT. 06/02 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "MOFAN", "rekSimpanan": "211052002880", "rekPembiayaan": "551052000965", "alamat": "DK. SUKOREJO RT. 01/02 DS. SUKOREJO KEC. LIMPUNG KAB. BATANG"}, {"nama": "MOHAMMAD FENGKI HUSAIN", "rekSimpanan": "211052003663", "rekPembiayaan": "541052002477", "alamat": "DK.GEDONGANRT.04/01 DS.REJOSARI BARAT - TERSONO"}, {"nama": "MUFATEHATI", "rekSimpanan": "211052002153", "rekPembiayaan": "551052001923", "alamat": "DK. PEJATEN RT 03/03 DS. REJOSARI BARAT TERSONO"}, {"nama": "MUH. AKROM", "rekSimpanan": "211052001231", "rekPembiayaan": "541052003154", "alamat": "DS. LIMPUNG RT 04/02 KEC. LIMPUNG BATANG"}, {"nama": "MUHAMAD FAKHRUROZI", "rekSimpanan": "211052004084", "rekPembiayaan": "541052002920", "alamat": "DK. KARANGTENGAH RT 11/03 DS. KEMESU KEC. REBAN BATANG"}, {"nama": "MUHAMMAD NAJIB NASRULLAH", "rekSimpanan": "211052003881", "rekPembiayaan": "541052002751", "alamat": "DK.BANTENG RT.01/01 DS.BANTENG - TERSONO"}, {"nama": "MUHAMMAD ROZIKIN", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK. SIKIDANG RT. 01/03 DS. DONOREJO KEC. LIMPUNG KAB. BATANG"}, {"nama": "MUHAMMAD YASIR MAFTUKH", "rekSimpanan": "211052003254", "rekPembiayaan": "541052003086", "alamat": "DK. KALIBENING RT. 02/02 DS. KALISALAK KEC. LIMPUNG KAB. BATANG"}, {"nama": "MUHLISIN", "rekSimpanan": "211052003899", "rekPembiayaan": "551052001890", "alamat": "DK.SORO GATEN RT.09/04 DS.GONDO - TERSONO"}, {"nama": "MUHSININ", "rekSimpanan": "211052003844", "rekPembiayaan": "551052001817", "alamat": "DK.DLISEN RT.0101 DS.DLISEN- LIMPUNG"}, {"nama": "MUJIATI", "rekSimpanan": "211052003833", "rekPembiayaan": "541052002680", "alamat": "DK. MRAJI RT 02/04 DS. WONOKERSO KEC. LIMPUNG BATANG"}, {"nama": "MUKHAYATI", "rekSimpanan": "211052003885", "rekPembiayaan": "541052002754", "alamat": "DK.BUBAKAN HAJI RT.01/01 DS.HARJOWINANGUN TIMUR"}, {"nama": "MUKHOFIFAH", "rekSimpanan": "111052000016", "rekPembiayaan": "", "alamat": "DK.WATES RT 01/06 DS.KRANGGAN TERSONO"}, {"nama": "MUKHSININ", "rekSimpanan": "211052003879", "rekPembiayaan": "541052002748", "alamat": "DK.MLANGI RT.02/05 DS.TERSONO - TERSONO"}, {"nama": "MUKMIN", "rekSimpanan": "211052003812", "rekPembiayaan": "541052003000", "alamat": "DK.SENDANG RT.04/02 DS.SENDANG - TERSONO"}, {"nama": "MULYONO", "rekSimpanan": "211052004332", "rekPembiayaan": "541052003102", "alamat": "DK. AMPELSARI RT 09/04 DS.SENDANG KE. TERSONO BATANG"}, {"nama": "MUSLIKHAH", "rekSimpanan": "211052000587", "rekPembiayaan": "551052001549", "alamat": "REJOSARI BARAT RT 06/01.TERSONO"}, {"nama": "MUSROKHAH", "rekSimpanan": "211052002856", "rekPembiayaan": "541052002939", "alamat": "DK. KEPATIHAN RT. 02/02 DS. TERSONO KEC. TERSONO KAB. BATANG"}, {"nama": "MUSTOFIYAH", "rekSimpanan": "211052000224", "rekPembiayaan": "541052003129", "alamat": "REJOSARI BARAT RT 03/01 TERSONO BATANG"}, {"nama": "MUZDALIFAH", "rekSimpanan": "211052003807", "rekPembiayaan": "541052003037", "alamat": "DK.PLUMBON RT.01/01 DS.PLUMBON - LIMPUNG"}, {"nama": "NASIRUN", "rekSimpanan": "211052000437", "rekPembiayaan": "551052000525", "alamat": "KARANG GONDANG RT 01/01 PESALAKAN, BANDAR"}, {"nama": "NASOHA", "rekSimpanan": "211052003009", "rekPembiayaan": "551052001044", "alamat": "DK. AMPELGADING RT 01/01 DS. NGROTO KEC REBAN BTG"}, {"nama": "NETI ARIANA", "rekSimpanan": "211052001571", "rekPembiayaan": "541052003153", "alamat": "DK.AMUNGROGO RT 02/02 DS.AMONGROGO LIMPUNG"}, {"nama": "NIKMATUL AINIYAH", "rekSimpanan": "211052003970", "rekPembiayaan": "541052002769", "alamat": "DK.KEBANGGAN RT.06/03 DS.SENDANG - TERSONO"}, {"nama": "NIRAWATI", "rekSimpanan": "211052001346", "rekPembiayaan": "541052002988", "alamat": "DK.CENDONO LOR RT. 02/01 DS.TEMBOK KEC.LIMPUNG"}, {"nama": "NOVA HERU PRASETYA", "rekSimpanan": "211052000877", "rekPembiayaan": "541052003013", "alamat": "TERSONO RT 005 RW 002 ,BATANG"}, {"nama": "NUR AINIYAH", "rekSimpanan": "211052000671", "rekPembiayaan": "551052001524", "alamat": "DS. SUKOREJO RT 05/01 LIMPUNG BATANG"}, {"nama": "NUR ANIFAH", "rekSimpanan": "211052000358", "rekPembiayaan": "541052003124", "alamat": "GEDONGAN RT/RW 04/01 REJOSARI BARAT TERSONO"}, {"nama": "NUR HIDAYAH", "rekSimpanan": "211052003640", "rekPembiayaan": "541052002434", "alamat": "DK.DERMAN RT.019/05 DS.GUMAWANG - PECALUNGAN"}, {"nama": "NUR HIDAYATI", "rekSimpanan": "211052001754", "rekPembiayaan": "541052002024", "alamat": "DK. KEBANGGAN RT 05/03 DS. SENDANG TERSONO"}, {"nama": "NUR KHAFIDZIN", "rekSimpanan": "211052002514", "rekPembiayaan": "541052003114", "alamat": "DK. KEPATIHAN RT. 02/02 DS. TERSONO TERSONO"}, {"nama": "NUR KHALIMIN", "rekSimpanan": "211052003779", "rekPembiayaan": "541052003031", "alamat": "DK.TIMBANG RT.09/03 DS.TIMBANG - BANYUPUTIH"}, {"nama": "NUR KHAYATI", "rekSimpanan": "211052003621", "rekPembiayaan": "541052003092", "alamat": "DK.MILUWUNG RT.05/03 DS.REJOSARI BARAT - TERSONO"}, {"nama": "NUR KHOYIN", "rekSimpanan": "211052002106", "rekPembiayaan": "541052001562", "alamat": "DK. WATES RT. 01/02 WONOKERSO LIMPUNG"}, {"nama": "NUR ROFIK", "rekSimpanan": "211052004035", "rekPembiayaan": "541052002868", "alamat": "DK.SUKOREJO RT.04/02 DS.SUKOREJO - LIMPUNG"}, {"nama": "NURAENI", "rekSimpanan": "211052003536", "rekPembiayaan": "541052003142", "alamat": "DK.SIKEBO RT.01/04 DS.LIMPUNG - LIMPUNG"}, {"nama": "NURHAYATI", "rekSimpanan": "211052003415", "rekPembiayaan": "541052002228", "alamat": "DK. KARANGJATI RT. 02/03 DS. KEBUMEN KEC. TERSONO KAB. BATANG"}, {"nama": "NURKHOYIN", "rekSimpanan": "211052003971", "rekPembiayaan": "541052002773", "alamat": "DK.WONOSOBO RT.02/03 DS.WONOSOBO - REBAN"}, {"nama": "NUROKHMAH", "rekSimpanan": "211052003804", "rekPembiayaan": "541052002835", "alamat": "DK.KEBONPETUNG RT.06/02 DS.REJOSARI BARAT - TERSONO"}, {"nama": "NURUDIN", "rekSimpanan": "211052000458", "rekPembiayaan": "551052001951", "alamat": "DK. GEDONGAN RT 03/01 REJOSARI BARAT, TERSONO"}, {"nama": "NURYANTI", "rekSimpanan": "211052004292", "rekPembiayaan": "541052003034", "alamat": "DK. GUNUNGMULYO RT 13/03 DS. DELES KEC. BAWANG BATANG"}, {"nama": "OKI SEPTIANI", "rekSimpanan": "211052000823", "rekPembiayaan": "541052002994", "alamat": "KALISARI RT 03/01 KALISARI BLADO"}, {"nama": "PARIKHIN", "rekSimpanan": "211052003492", "rekPembiayaan": "541052002243", "alamat": "DK. SURJO RT. 08/03 DS. SURJO KEC. BAWANG KAB. BATANG"}, {"nama": "PARSIKIN", "rekSimpanan": "211052002872", "rekPembiayaan": "541052003120", "alamat": "DK. DURENSARI RT. 02/03 DS. DURENOMBO KEC. SUBAH KAB. BATANG"}, {"nama": "PARYATI", "rekSimpanan": "211052002309", "rekPembiayaan": "541052003099", "alamat": "DK. SENDANG RT. 02/01 DS. SENDANG TERSONO"}, {"nama": "PATAH", "rekSimpanan": "211052000058", "rekPembiayaan": "541052002002", "alamat": "LimbanganRT/RW. 004/0 Rejosari Barat Tersono Batang"}, {"nama": "PAWITRI", "rekSimpanan": "211052002314", "rekPembiayaan": "541052003083", "alamat": "DK. SENDANG RT. 01/01 DS. SENDANG TERSONO"}, {"nama": "PUJI PURWANTI", "rekSimpanan": "211052001665", "rekPembiayaan": "541052003042", "alamat": "DK. LIMBANGAN RT. 03/02 REJOSARI BARAT TERSONO BATANG"}, {"nama": "PUJIONO", "rekSimpanan": "211052003370", "rekPembiayaan": "541052003090", "alamat": "DK. BRANGSONG RT. 03/01 DS. REJOSARI TIMUR KEC. TERSONO KAB. BATANG"}, {"nama": "RAHARJO", "rekSimpanan": "211052002767", "rekPembiayaan": "541052002923", "alamat": "DK. KAUM RT. 01/04 DS. SUBAH KEC. SUBAH KAB. BATANG"}, {"nama": "RAHMAD EFENDI", "rekSimpanan": "211052002777", "rekPembiayaan": "541052001689", "alamat": "DK. BEJI RT. 06/02 DS. BEJI KEC. TULIS KAB. BATANG"}, {"nama": "RANI WIJAYANTI", "rekSimpanan": "211052002270", "rekPembiayaan": "551052001953", "alamat": "DK GEDONGAN RT. 06/01 DS. REJOSARI BARAT TERSONO"}, {"nama": "RENI KURNIA HATI", "rekSimpanan": "211052004327", "rekPembiayaan": "541052003100", "alamat": "DK. GEDONGAN RT. 01/01 DS. REJOSARI BARAT KEC. TERSONO"}, {"nama": "RENI WIDIASTUTI", "rekSimpanan": "211052001575", "rekPembiayaan": "541052003021", "alamat": "DK.PUJUT RT 03/02 DS.PUJUT TERSONO BATANG"}, {"nama": "REPIN", "rekSimpanan": "211052003681", "rekPembiayaan": "541052002972", "alamat": "DK.KEBONPETUNG RT.06/02 DS.REJOSARI BARAT - TERSONO"}, {"nama": "REZA SAPUTRA ADI", "rekSimpanan": "211052004089", "rekPembiayaan": "541052002926", "alamat": "DK.SEMPU RT 02/01 DS.SEMPU KEC.LIMPUNG BATANG"}, {"nama": "RIAN ADE PRATAMA", "rekSimpanan": "211052003665", "rekPembiayaan": "541052002825", "alamat": "LIMPUNG RT 03/02 LIMPUNG"}, {"nama": "RIDWAN", "rekSimpanan": "211052000760", "rekPembiayaan": "541052002831", "alamat": "DS. GONDO RT 01/01 TERSONO BATANG"}, {"nama": "RISA NUR RANI", "rekSimpanan": "211052004135", "rekPembiayaan": "551052001806", "alamat": "DK. BANJARAN RT. 011/003 DS. SEMAMPIR KEC. REBAN KAB. BATANG"}, {"nama": "RISDIYANTO", "rekSimpanan": "211052004118", "rekPembiayaan": "541052002943", "alamat": "DK. SIKUNIR RT. 08/02 DS. JLAMPRANG KEC. BAWANG KAB. BATANG"}, {"nama": "RISWANTO", "rekSimpanan": "211052002668", "rekPembiayaan": "541052002916", "alamat": "DK. GONDO RT. 03/01 DS. GONDO KEC. TERSONO KAB. BATANG"}, {"nama": "RIYA PURNAMASARI", "rekSimpanan": "211052003656", "rekPembiayaan": "541052002890", "alamat": "JL.BINTORO VII RT.05/08 DS.PANDEANLAMPER - GAYAMSARI"}, {"nama": "RIYADEN", "rekSimpanan": "211052003671", "rekPembiayaan": "541052002494", "alamat": "DK.KEDUNG DOWO RT.01/03 DS.PRETEK - PECALUNGAN"}, {"nama": "RIYANI INDAH HIDAYATI", "rekSimpanan": "211052003783", "rekPembiayaan": "541052002992", "alamat": "DK.KEBONPETUNG RT.06/02 DS.REJOSARI BARAT - TERSONO"}, {"nama": "RIZA WIJAYANTI", "rekSimpanan": "211052002066", "rekPembiayaan": "551052001958", "alamat": "DK. MEDONO RT 05/03 DS. PLUMBON KEC.LIMPUNG BATANG"}, {"nama": "ROHMAT", "rekSimpanan": "211052002754", "rekPembiayaan": "541052003073", "alamat": "DK. SENDANG RT. 04/01 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "ROKHADI", "rekSimpanan": "211052004100", "rekPembiayaan": "551052001934", "alamat": "DK. SENDANG RT. 03/02 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "ROKHIM SLAMET", "rekSimpanan": "211052002503", "rekPembiayaan": "541052003097", "alamat": "DK. BANTENG RT. 03/01 DS. BANTENG TERSONO"}, {"nama": "RONDI", "rekSimpanan": "211052003720", "rekPembiayaan": "541052002971", "alamat": "DK.SENDANG RT.02/01 DS.SENDANG - TERSONO"}, {"nama": "RONI FASLAH", "rekSimpanan": "211052004021", "rekPembiayaan": "551052001809", "alamat": "DK.KRANGKOAN RT.03/02 DS.NGALIYAN - LIMPUNG"}, {"nama": "ROSIDIN", "rekSimpanan": "211052004297", "rekPembiayaan": "541052003148", "alamat": "DK. SENDANG RT 04/01 DS. SENDANG KEC. TERSONO BATANG"}, {"nama": "RUNI", "rekSimpanan": "211052002724", "rekPembiayaan": "544052000706", "alamat": "DK. MUNGGANSARI RT. 02/01 DS. GOMBONG KEC. PECALUNGAN KAB. BATANG"}, {"nama": "RUSIDAH", "rekSimpanan": "211052001725", "rekPembiayaan": "541052001691", "alamat": "DK. REJOSARI RT 07/04 DS. SENDANG TERSONO"}, {"nama": "RUSNANDAR", "rekSimpanan": "211052004265", "rekPembiayaan": "541052003023", "alamat": "DK. LIMBANGAN RT 05/02 DS. REJOSARI BARAT KEC. TERSONO BATANG"}, {"nama": "RUSNO", "rekSimpanan": "211052003376", "rekPembiayaan": "541052002789", "alamat": "DK. LIMBANGAN  RT. 05/02 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "RUSTIANAH", "rekSimpanan": "211052004006", "rekPembiayaan": "541052003080", "alamat": "DK. MILUWUNG RT 01/03 DS. REJOSARI BARAT KEC. TERSONO BATANG"}, {"nama": "SABARI", "rekSimpanan": "211052000659", "rekPembiayaan": "551052000635", "alamat": "DS.REJOSARI BARAT RT 06/01.TERSONO"}, {"nama": "SAIT", "rekSimpanan": "211052002275", "rekPembiayaan": "541052002796", "alamat": "DK. BAKAN RT 09/01 DS. HARJOWINANGUN TIMUR TERSONO"}, {"nama": "SAMARI", "rekSimpanan": "211052003960", "rekPembiayaan": "541052003072", "alamat": "DK.SENDANG RT.03/02 DS. SENDANG - TERSONO"}, {"nama": "SAPTOWATI", "rekSimpanan": "211052000817", "rekPembiayaan": "541052001104", "alamat": "DK.PEJATEN RT 04/03 REJOSARI BARAT TERSONO"}, {"nama": "SARMIDI", "rekSimpanan": "211052004058", "rekPembiayaan": "541052002894", "alamat": "DK.BANTENG RT.04/02 DS.BANTENG - TERSONO"}, {"nama": "SARYONO", "rekSimpanan": "211052002561", "rekPembiayaan": "551052001949", "alamat": "DK. LIMBANGAN RT. 05/02 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "SAYOMAH", "rekSimpanan": "211052000858", "rekPembiayaan": "541052000621", "alamat": "DK, PROTO RT 03/05 TAMBAHREJO BANDAR"}, {"nama": "SEPTI MULYANI", "rekSimpanan": "211052004024", "rekPembiayaan": "541052003115", "alamat": "DK.GEPOR RT 03/03 DS.LIMPUNG KEC.LIMPUNG BATANG"}, {"nama": "SETIANINGSIH", "rekSimpanan": "211052001684", "rekPembiayaan": "551052001960", "alamat": "DK. CENDONO LOR RT. 02/01 DS. TEMBOK LIMPUNG BATANG"}, {"nama": "SETIARSO A.MA", "rekSimpanan": "211052000562", "rekPembiayaan": "541052001990", "alamat": "REJOSARI BARAT RT 01 RW 01.TERSONO"}, {"nama": "SIGIT SULISTYAWAN", "rekSimpanan": "211052004119", "rekPembiayaan": "541052002944", "alamat": "DK. KEBON PETUNG RT. 06/02 DS.. REJOSARI BARAT KEC. TERSONO KAB.BATANG"}, {"nama": "SITI MISRINA", "rekSimpanan": "211052000266", "rekPembiayaan": "551052000135", "alamat": "TAMBAHREJO RT 03/04 BANDAR"}, {"nama": "SITI MUASAROH", "rekSimpanan": "211052002711", "rekPembiayaan": "551052001962", "alamat": "DK. SENER RT. 03/06 DS. KRANGGAN KEC. TERSONO KAB. BATANG"}, {"nama": "SITI NURJANAH, ,S.PD.I", "rekSimpanan": "211052003585", "rekPembiayaan": "541052002876", "alamat": "DK.AMONGROGO RT.02/06 DS.AMONGROGO - LIMPUNG"}, {"nama": "SITI PURWANTI", "rekSimpanan": "211052002545", "rekPembiayaan": "541052003033", "alamat": "DK. GEDONGAN RT. 04/01 DS. REJOSARI BARAT TERSONO"}, {"nama": "SITI RIWAYATI HJ", "rekSimpanan": "211052002350", "rekPembiayaan": "541052001586", "alamat": "DK. KARANGANYAR RT. 07/04 DS. SUMUR BANGER TERSONO"}, {"nama": "SITI RODHIYAH", "rekSimpanan": "211052003837", "rekPembiayaan": "541052002886", "alamat": "DK.NGALIYAN RT.03/01 DS.NGALIYAN - LIMPUNG"}, {"nama": "SITI ROMLAH", "rekSimpanan": "211052001016", "rekPembiayaan": "541052002531", "alamat": "TERSONO BATANG"}, {"nama": "SITI YUMAROH", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "DK. SIGUCI RT. 01/01 DS. SIGUCI KEC. PECALUNGAN KAB. BATANG"}, {"nama": "SLAMET", "rekSimpanan": "211052002455", "rekPembiayaan": "551052001756", "alamat": "DK. DURENSARI RT. 02/03 DS. DURENOMBO SUBAH"}, {"nama": "SLAMET ABDUL AZIZ", "rekSimpanan": "211052004423", "rekPembiayaan": "551052001957", "alamat": "DK. WATES RT 01/02 DS.WONOKERSO KE.LIMPUNG BATANG"}, {"nama": "SLAMET RIYANTO", "rekSimpanan": "211052000074", "rekPembiayaan": "551052001180", "alamat": "GedonganRT/RW. 004/0 Rejosari Barat Tersono Batang"}, {"nama": "SRI DATI", "rekSimpanan": "211052003622", "rekPembiayaan": "551052001959", "alamat": "DK. PLOSO RT.06/03 DS.PLOSO WANGI - TERSONO"}, {"nama": "SRI HIDAYAWATI", "rekSimpanan": "211052004145", "rekPembiayaan": "541052002962", "alamat": "DK. REJOSARI RT. 07/04 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "SRI SHOLATI", "rekSimpanan": "211052003199", "rekPembiayaan": "541052002756", "alamat": "DK. KRANDON RT. 02/03 DS. DONOREJO KEC. LIMPUNG KAB. BATANG"}, {"nama": "SRI WACHYUNI", "rekSimpanan": "211052002589", "rekPembiayaan": "541052003121", "alamat": "DK. SENDANG RT. 01/01 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "SRI YUNIARSIH", "rekSimpanan": "211052004278", "rekPembiayaan": "551052001945", "alamat": "DK. KAUM RT 02/01 DS. KEBUMEN KEC. TERSONO BATANG"}, {"nama": "SUBANDRIYO", "rekSimpanan": "211052000472", "rekPembiayaan": "541052003062", "alamat": "DK. GEDONGAN RT 04/01 REJOSARI BARAT, TERSONO"}, {"nama": "SUBKHI", "rekSimpanan": "211052002603", "rekPembiayaan": "541052002076", "alamat": "DK. PONORAGAN RT. 05/02 DS. TANJUNGSARI KEC. TERSONO KAB. BATANG"}, {"nama": "SUDIRO", "rekSimpanan": "211052001450", "rekPembiayaan": "541052002454", "alamat": "DK. REJOSARI RT 08/04 DS.SENDANG TERSONO BATANG"}, {"nama": "SUGIYO", "rekSimpanan": "211052004096", "rekPembiayaan": "541052002931", "alamat": "DK. SENDANG RT. 03/02 DS. SENDANG KEC.TERSONO KAB. BATANG"}, {"nama": "SUGIYONO", "rekSimpanan": "211052001195", "rekPembiayaan": "541052002270", "alamat": "DK.DAMPYAK RT 05/03 DS.BOJA TERSONO"}, {"nama": "SUJARNO", "rekSimpanan": "211052000113", "rekPembiayaan": "551052000154", "alamat": "GEDONGAN REJOSARI BART/RW. 01/01  TERSONO BATANG"}, {"nama": "SUKADRI", "rekSimpanan": "211052003260", "rekPembiayaan": "541052003053", "alamat": "DK. PADENOKAN RT. 01/01 DS. AMONGROGO KEC. LIMPUNG KAB. BATANG"}, {"nama": "SUKARDI", "rekSimpanan": "211052004059", "rekPembiayaan": "541052002893", "alamat": "DK.KARANGANYAR RT.03/01 DS.KARANGANYAR - REBAN"}, {"nama": "SULASIH", "rekSimpanan": "211052002469", "rekPembiayaan": "541052003026", "alamat": "DK. SENDANG RT. 02/01 DS. SENDANG TERSONO"}, {"nama": "SULASTRI", "rekSimpanan": "211052001435", "rekPembiayaan": "541052003144", "alamat": "DK. GEPOR RT 01/03 DS.LIMPUNG KEC.LIMPUNG BATANG"}, {"nama": "SUMARNI", "rekSimpanan": "211052002200", "rekPembiayaan": "541052002486", "alamat": "DK. KARANGJATI RT. 02/03 DS. KEBUMEN TERSONO"}, {"nama": "SUMARYAM", "rekSimpanan": "211052000158", "rekPembiayaan": "541052003059", "alamat": "DUKUH LIMPUNG RT 03 RW 02 KEC.LIMPUNG"}, {"nama": "SUNARTI", "rekSimpanan": "", "rekPembiayaan": "", "alamat": "SikidangRT/RW. 01/03 Donorejo Limpung Batang"}, {"nama": "SUNARTO", "rekSimpanan": "211052003289", "rekPembiayaan": "541052002669", "alamat": "DK. PONORAGAN RT. 04/02 DS. TANJUNGSARI KEC. TERSONO KAB. BATANG"}, {"nama": "SUPARI", "rekSimpanan": "211052004112", "rekPembiayaan": "541052002942", "alamat": "DK. GUMELEM RT. 11/03 DS. GUMAWANG  KEC. PECALUNGAN"}, {"nama": "SUPRAPTINI", "rekSimpanan": "211052001678", "rekPembiayaan": "541052003135", "alamat": "DK. PONORAGAN RT. 02/02 TANJUNGSARI TERSONO BATANG"}, {"nama": "SUPRAYITNO", "rekSimpanan": "211052000232", "rekPembiayaan": "551052001939", "alamat": "LIMBANGAN RT 01/02 REJOSARI BARAT TERSONO"}, {"nama": "SUPRIYANTO", "rekSimpanan": "211052000543", "rekPembiayaan": "551052000575", "alamat": "SIWONOTRT/RW. 009/002  WONOTUNGAL"}, {"nama": "SURAJI", "rekSimpanan": "211052002371", "rekPembiayaan": "541052003108", "alamat": "DK. SENDANG RT. 01/01 DS. SENDANG TERSONO"}, {"nama": "SURATIN", "rekSimpanan": "211052003500", "rekPembiayaan": "541052003119", "alamat": "DK.SENDANG RT.03/02 DS.SENDANG KEC.TERSONO"}, {"nama": "SURATMI", "rekSimpanan": "211052004109", "rekPembiayaan": "541052003061", "alamat": "DK. AMPELSARI RT. 09/04 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "SURINI", "rekSimpanan": "211052004305", "rekPembiayaan": "541052003063", "alamat": "DK. MANGGUNGAN RT. 02/02 DS. SELOKARTO KEC. PECALUNGAN KAB. BATANG"}, {"nama": "SURIP", "rekSimpanan": "211052004309", "rekPembiayaan": "541052003069", "alamat": "DS. SUKOMANGLI RT 02/01 KEC. REBAN BATANG"}, {"nama": "SURIP SUTRESNO", "rekSimpanan": "211052100005", "rekPembiayaan": "541052000235", "alamat": "PUCANGGADINGRT/RW. 04/02  BANDAR /BATANG"}, {"nama": "SURONO", "rekSimpanan": "211052004243", "rekPembiayaan": "541052002987", "alamat": "DK KEDAWUNG RT/RW 005/001 DS KEDAWUNG KEC BANYUPUTIH BATANG"}, {"nama": "SUROSO", "rekSimpanan": "211052001629", "rekPembiayaan": "541052001420", "alamat": "DK KEBANGGAN RT 06/03 DS SENDANG TERSONO BATANG"}, {"nama": "SUSANTO", "rekSimpanan": "211052004086", "rekPembiayaan": "541052003070", "alamat": "DK. KARANGTALUN RT 04/03 DS. BULU KEC BANYUPUTIH BATANG"}, {"nama": "SUSMIYATI", "rekSimpanan": "211052002369", "rekPembiayaan": "541052001398", "alamat": "DK. PEKUNCEN RT. 01/02 DS. REJOSARI TIMUR TERSONO"}, {"nama": "SUTIMAH", "rekSimpanan": "211052003823", "rekPembiayaan": "541052002913", "alamat": "DK.KEBANGGAN RT.06/03 DS.SENDANG - TERSONO"}, {"nama": "SUTRIMO", "rekSimpanan": "211052000540", "rekPembiayaan": "541052003139", "alamat": "DK,TEMBOK RT02/02 DS.TEMBOK LIMPUNG"}, {"nama": "SUUD", "rekSimpanan": "211052000425", "rekPembiayaan": "551052001937", "alamat": "LIMBANGAN RT 01/02,REJOSARI BARAT.TERSONO"}, {"nama": "SUWANDI", "rekSimpanan": "211052000214", "rekPembiayaan": "551052001034", "alamat": "DK, LIMBANGAN RT 01/02 REJOSARI BARAT TERSONO"}, {"nama": "SUYAHMAN", "rekSimpanan": "211052001939", "rekPembiayaan": "551052001963", "alamat": "DS. ROWOSARI RT 03/01 DS. ROWOSARI LIMPUNG"}, {"nama": "SUYANTI", "rekSimpanan": "211052003396", "rekPembiayaan": "541052003109", "alamat": "DK. REJOSARI RT 08/04 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "SYAEFUDIN ZUHRI", "rekSimpanan": "211052000130", "rekPembiayaan": "541052003112", "alamat": "KalengganganRT/RW. 05/02 Sukorejo Limpung Batang"}, {"nama": "SYAIR", "rekSimpanan": "211052004146", "rekPembiayaan": "541052002964", "alamat": "DK. LOBANG RT. 08/01 DS. LOBANG KEC. LIMPUNG KAB. BATANG"}, {"nama": "TA'ATI", "rekSimpanan": "211052000393", "rekPembiayaan": "551052000573", "alamat": "PUCANGGADINGRT/RW. 001/003  BANDAR BATANG"}, {"nama": "TAHRONI", "rekSimpanan": "211052003712", "rekPembiayaan": "541052003105", "alamat": "DK.AMPEL GADING RT.8/8 DS.GEMUH - PECALUNGAN"}, {"nama": "TARMAI", "rekSimpanan": "211052100048", "rekPembiayaan": "541052000548", "alamat": "ROMBEH SIPARRT/RW. 003/04  BANDAR BATANG"}, {"nama": "TARSONO", "rekSimpanan": "211052004336", "rekPembiayaan": "551052001932", "alamat": "DK. DURENSARI RT 02/03 DS. DURENOMBO KEC. SUBAH BATANG"}, {"nama": "TEGUH MARYONO", "rekSimpanan": "211052001196", "rekPembiayaan": "551052000416", "alamat": "DK.MANGGINGAN RT 05/02 DS.SELOKARTO PECALUNGAN"}, {"nama": "TEZNA ERVIANA", "rekSimpanan": "211052000732", "rekPembiayaan": "541052003060", "alamat": "DS. SEMPU RT 02/03 LIMPUNG, BATANG"}, {"nama": "TITI HARYANTI/ SG/ 085290057933", "rekSimpanan": "211052001250", "rekPembiayaan": "541052001508", "alamat": "LIMPUNG RT.05/02 LIMPUNG BATANG"}, {"nama": "TITIN SUWARNI", "rekSimpanan": "211052001487", "rekPembiayaan": "541052001862", "alamat": "DS.BANYUPUTIH RT 01/02 BANYUPUTIH BATANG"}, {"nama": "TIWIK HANDINI", "rekSimpanan": "211052004263", "rekPembiayaan": "541052003019", "alamat": "DK. BANARAN RT 04/02 DS. BABADAN KEC. LIMPUNG BATANG"}, {"nama": "TIYAS PRIYANTINI", "rekSimpanan": "211052002933", "rekPembiayaan": "541052003152", "alamat": "DK. KAUMAN RT. 04/03 DS. TERSONO KEC. TERSONO KAB. BATANG"}, {"nama": "TOHA", "rekSimpanan": "211052002362", "rekPembiayaan": "541052003056", "alamat": "DK. KEBANGGAN RT. 05/03 DS. SENDANG TERSONO"}, {"nama": "TRI HADI WIBOWO", "rekSimpanan": "211052003969", "rekPembiayaan": "541052002770", "alamat": "DK.BANARAN II RT.04/02 DS.BABADAN - LIMPUNG"}, {"nama": "TRI KURNIASIH", "rekSimpanan": "211052002814", "rekPembiayaan": "541052003111", "alamat": "DK. SENDANG RT. 02/01 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "TURIPAH", "rekSimpanan": "211052004038", "rekPembiayaan": "541052003143", "alamat": "DK.DURENSARI RT.01/03 DS.DURENOMBO - SUBAH"}, {"nama": "TURYANTO", "rekSimpanan": "211052002305", "rekPembiayaan": "551052000729", "alamat": "DK. WATES RT 01/02 DS. WONOKERSO LIMPUNG"}, {"nama": "TUTUR INAYAH", "rekSimpanan": "211052003799", "rekPembiayaan": "551052001961", "alamat": "DK. PLOSOWANGI RT 06/03 DS. PLOSOWANGI KEC. TERSONO BATANG"}, {"nama": "TUTUR TURAH", "rekSimpanan": "211052004012", "rekPembiayaan": "541052003096", "alamat": "DK. KEBUTUH RT 01/02 DS. KARANGANYAR KEC. REBAN BATANG"}, {"nama": "UMAYATI", "rekSimpanan": "211052002995", "rekPembiayaan": "551052001155", "alamat": "DK. GEDONGAN RT 07/01 DS. CLAPAR SUBAH BATANG"}, {"nama": "UMI YUNURROINI", "rekSimpanan": "211052003850", "rekPembiayaan": "541052003132", "alamat": "DK.PUJUT RT.02/02 DS.PUJUT - TERSONO"}, {"nama": "UMUL FADHILAH", "rekSimpanan": "211052001711", "rekPembiayaan": "541052003125", "alamat": "DK. KALIBALIK RT 03/02 DS. KALIBALIK BANYUPUTIH"}, {"nama": "UNTUNG", "rekSimpanan": "211052003760", "rekPembiayaan": "551052001924", "alamat": "DK.MILUWUNG RT.05/03 DS.REJOSARI BARAT - TERSONO"}, {"nama": "UNTUNG PRAYITNO", "rekSimpanan": "211052002512", "rekPembiayaan": "541052003136", "alamat": "DK. LIMBANGAN RT. 01/02 DS. REJOSARI BARAT TERSONO"}, {"nama": "UNTUNG SETYA BUDI", "rekSimpanan": "211052003027", "rekPembiayaan": "541052002297", "alamat": "DK. GEDONGAN RT. 03/01 DS. REJOSARI BARAT KEC. TERSONO KAB. BATANG"}, {"nama": "USWATUN HASANAH", "rekSimpanan": "211052002719", "rekPembiayaan": "541052001824", "alamat": "DK. PETAMANAN RT. 06/03 DS. BANYUPUTIH KEC. BANYUPUTIH KAB. BATANG"}, {"nama": "VENY KHOIRUNISA", "rekSimpanan": "211052001716", "rekPembiayaan": "542052000027", "alamat": "DK. BUBAKAN HAJI RT 01/01 DS. HARJOWINANGUN TIMUR TERSONO"}, {"nama": "WAHIDATUN NISAK", "rekSimpanan": "211052004234", "rekPembiayaan": "541052003078", "alamat": "DK. BANDUNGAN RT. 03/01 DS. SUKOREJO KEC. LIMPUNG KAB. BATANG"}, {"nama": "WAHIDIN", "rekSimpanan": "211052001467", "rekPembiayaan": "551052000515", "alamat": "DK.WADAS RT 05/01 DS.SELOKARTO KEC.PECALUNGAN BATANG"}, {"nama": "WAHONO", "rekSimpanan": "211052003947", "rekPembiayaan": "541052002928", "alamat": "DK.SENDANG RT.03/02 TERSONO"}, {"nama": "WAHYO", "rekSimpanan": "211052004136", "rekPembiayaan": "541052002950", "alamat": "DK. SIWARAK RT. 05/05 DS. SELOKARTO KEC. PECALUNGAN KAB. BATANG"}, {"nama": "WAHYUDIN", "rekSimpanan": "211052000235", "rekPembiayaan": "541052000588", "alamat": "PUCANGGADING UTARA RT 01/03 BANDAR"}, {"nama": "WAHYUNINGSIH", "rekSimpanan": "211052002956", "rekPembiayaan": "541052002846", "alamat": "DK. PONORAGAN RT. 02/02 DS. TANJUNGSARI KEC. TERSONO KAB. BATANG"}, {"nama": "WARIS", "rekSimpanan": "211052000088", "rekPembiayaan": "541052003137", "alamat": "LimbanganRT/RW. 01/02 Rejosari Barat Tersono Batang"}, {"nama": "WASDURI", "rekSimpanan": "211052004245", "rekPembiayaan": "551052001839", "alamat": "DK. KURIPAN RT 05/01 DS. KURIPAN KEC SUBAH BATANG"}, {"nama": "YAKUTI", "rekSimpanan": "211052002969", "rekPembiayaan": "551052001018", "alamat": "DK. KEBANGGAN RT. 06/03 DS. SENDANG KEC. TERSONO KAB. BATANG"}, {"nama": "YANIK KHIKMATUL ROHMANIA", "rekSimpanan": "211052002022", "rekPembiayaan": "541052003079", "alamat": "DK. LIMBANGAN RT 04/02 DS. REJOSARI BARAT TERSONO"}, {"nama": "YESI RAHMAWATI", "rekSimpanan": "211052002962", "rekPembiayaan": "541052002456", "alamat": "DK. RINGINSARI RT. 04/02 DS. SURODADI KEC. GRINGSING KAB. BATANG"}, {"nama": "YOSI ELIANI", "rekSimpanan": "211052004010", "rekPembiayaan": "551052001942", "alamat": "DK.KARANGJATI RT.07/03 DS.KEBUMEN - TERSONO"}, {"nama": "YULIANIS", "rekSimpanan": "211052000532", "rekPembiayaan": "551052001888", "alamat": "DS.PLUMBON RT 06 RW 01,LIMPUNG"}, {"nama": "YUNIKA DEWI PURNAMASARI", "rekSimpanan": "211052003512", "rekPembiayaan": "551052001917", "alamat": "DK.LIMBANGAN RT.03/02 DS.REJOSARI BARAT - TERSONO"}, {"nama": "ZAENAL ABIDIN", "rekSimpanan": "211052001480", "rekPembiayaan": "551052001931", "alamat": "DK.GEDONGAN RT 06/01 DS.REJOSARI BARAT TERSONO"}, {"nama": "ZAENUDIN", "rekSimpanan": "211052003831", "rekPembiayaan": "551052001787", "alamat": "DK.DURENSARI RT.02/03 DS.DURENOMBO - SUBAH"}, {"nama": "ZAENUL MUSHOFFA", "rekSimpanan": "211052002236", "rekPembiayaan": "544052000714", "alamat": "DK. TEMPURAN RT. 03/02 DS. HARJOWINANGUN BARAT TERSONO"}, {"nama": "ZAMRONI", "rekSimpanan": "211052000430", "rekPembiayaan": "541052002867", "alamat": "GEDONGAN REJOSARI BART/RW. 006/001  TERSONO BATANG"}].map((n) => ({
@@ -205,6 +314,13 @@ function BukuKunjungan() {
   const [locError, setLocError] = useState("");
 
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [exportingId, setExportingId] = useState(null);
+
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+  const [adminError, setAdminError] = useState("");
+  const [editingVisitId, setEditingVisitId] = useState(null);
   const [lightbox, setLightbox] = useState(null);
 
   const fileInputRef = useRef(null);
@@ -316,21 +432,54 @@ function BukuKunjungan() {
   };
 
   const deleteNasabah = async (id) => {
+    if (!isAdmin) return;
     updateIndex((prev) => prev.filter((n) => n.id !== id));
     try { await storage.delete(detailKey(id), false); } catch (e) {}
     setConfirmDeleteId(null);
     if (expandedId === id) setExpandedId(null);
   };
 
-  const openVisitForm = (id) => {
+  const openVisitForm = (id, visit) => {
     setVisitForId(id);
-    setVisitDate(todayStr());
-    setVisitResult("");
-    setVisitPhotos([]);
+    if (visit) {
+      setEditingVisitId(visit.id);
+      setVisitDate(visit.tanggal);
+      setVisitResult(visit.hasil);
+      setVisitPhotos((visit.photos || []).map((p) => ({ dataUrl: p, kb: approxKB(p) })));
+      setVisitLocation(visit.location || null);
+    } else {
+      setEditingVisitId(null);
+      setVisitDate(todayStr());
+      setVisitResult("");
+      setVisitPhotos([]);
+      setVisitLocation(null);
+    }
     setPhotoError("");
-    setVisitLocation(null);
     setLocError("");
   };
+
+  const closeVisitForm = () => {
+    setVisitForId(null);
+    setEditingVisitId(null);
+    setVisitPhotos([]);
+    setVisitLocation(null);
+  };
+
+  const openAdminModal = () => {
+    setAdminPasswordInput("");
+    setAdminError("");
+    setShowAdminModal(true);
+  };
+  const submitAdminPassword = (e) => {
+    e.preventDefault();
+    if (adminPasswordInput === "9999") {
+      setIsAdmin(true);
+      setShowAdminModal(false);
+    } else {
+      setAdminError("Kode admin salah.");
+    }
+  };
+  const lockAdmin = () => setIsAdmin(false);
 
   useEffect(() => {
     if (!visitForId || !mapDivRef.current || !window.L) return;
@@ -418,29 +567,92 @@ function BukuKunjungan() {
     if (!visitResult.trim()) return;
     const id = visitForId;
     const current = detailCache[id] || (await loadDetail(id));
-    const newVisit = {
-      id: uid(),
-      tanggal: visitDate,
-      hasil: visitResult.trim(),
-      photos: visitPhotos.map((p) => p.dataUrl),
-      location: visitLocation,
-    };
-    const nextDetail = { kunjungan: [...current.kunjungan, newVisit] };
+    let nextKunjungan;
+    if (editingVisitId) {
+      nextKunjungan = current.kunjungan.map((v) =>
+        v.id === editingVisitId
+          ? { ...v, tanggal: visitDate, hasil: visitResult.trim(), photos: visitPhotos.map((p) => p.dataUrl), location: visitLocation }
+          : v
+      );
+    } else {
+      const newVisit = {
+        id: uid(),
+        tanggal: visitDate,
+        hasil: visitResult.trim(),
+        photos: visitPhotos.map((p) => p.dataUrl),
+        location: visitLocation,
+      };
+      nextKunjungan = [...current.kunjungan, newVisit];
+    }
+    const nextDetail = { kunjungan: nextKunjungan };
     setDetailCache((prev) => ({ ...prev, [id]: nextDetail }));
     await persistDetail(id, nextDetail);
     updateIndex((prev) => prev.map((n) => (n.id === id ? { ...n, visitCount: nextDetail.kunjungan.length } : n)));
     setVisitForId(null);
+    setEditingVisitId(null);
     setVisitPhotos([]);
     setVisitLocation(null);
   };
 
   const deleteVisit = async (nasabahId, visitId) => {
+    if (!isAdmin) return;
     const current = detailCache[nasabahId];
     if (!current) return;
     const nextDetail = { kunjungan: current.kunjungan.filter((v) => v.id !== visitId) };
     setDetailCache((prev) => ({ ...prev, [nasabahId]: nextDetail }));
     await persistDetail(nasabahId, nextDetail);
     updateIndex((prev) => prev.map((n) => (n.id === nasabahId ? { ...n, visitCount: nextDetail.kunjungan.length } : n)));
+  };
+
+  const exportReport = async (n, format) => {
+    if (!window.html2canvas || !window.jspdf) {
+      setSaveError("Komponen ekspor belum siap, coba lagi sesaat.");
+      return;
+    }
+    setExportingId(n.id);
+    let node = null;
+    try {
+      const detail = detailCache[n.id] || (await loadDetail(n.id));
+      node = buildReportNode(n, detail);
+      node.style.position = "fixed";
+      node.style.left = "-9999px";
+      node.style.top = "0";
+      document.body.appendChild(node);
+      await new Promise((res) => setTimeout(res, 350));
+      const canvas = await window.html2canvas(node, { scale: 2, useCORS: true, backgroundColor: "#FBF9F2" });
+      const filenameBase = `Laporan_${n.nama.replace(/\s+/g, "_")}`;
+      if (format === "jpg") {
+        const link = document.createElement("a");
+        link.href = canvas.toDataURL("image/jpeg", 0.92);
+        link.download = `${filenameBase}.jpg`;
+        link.click();
+      } else {
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF("p", "pt", "a4");
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const imgWidth = pageWidth;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        const imgData = canvas.toDataURL("image/jpeg", 0.92);
+        let heightLeft = imgHeight;
+        let position = 0;
+        pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+        }
+        pdf.save(`${filenameBase}.pdf`);
+      }
+      setSaveError("");
+    } catch (err) {
+      setSaveError("Gagal membuat laporan ekspor.");
+    } finally {
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+      setExportingId(null);
+    }
   };
 
   const aoOptions = Array.from(
@@ -487,10 +699,15 @@ function BukuKunjungan() {
       <header style={styles.header}>
         <div style={styles.headerInner}>
           <div style={styles.stampMark}>BK</div>
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <h1 style={styles.title}>Buku Kunjungan Nasabah</h1>
             <p style={styles.subtitle}>Catatan lapangan kunjungan, foto &amp; lokasi nasabah</p>
           </div>
+          {isAdmin ? (
+            <button style={styles.adminBtnActive} onClick={lockAdmin}>🔓 Admin Aktif</button>
+          ) : (
+            <button style={styles.adminBtn} onClick={openAdminModal}>🔒 Mode Admin</button>
+          )}
         </div>
       </header>
 
@@ -604,8 +821,12 @@ function BukuKunjungan() {
                       </div>
 
                       <div style={styles.rowActions}>
-                        <button style={styles.linkBtn} onClick={() => openEditForm(n)}>Edit data</button>
-                        <span style={styles.dotSep}>·</span>
+                        {isAdmin && (
+                          <>
+                            <button style={styles.linkBtn} onClick={() => openEditForm(n)}>Edit data</button>
+                            <span style={styles.dotSep}>·</span>
+                          </>
+                        )}
                         {n.alamat ? (
                           <a href={mapsAddressUrl(n.alamat)} target="_blank" rel="noopener noreferrer" style={styles.mapLink}>
                             🗺️ Peta alamat
@@ -621,16 +842,31 @@ function BukuKunjungan() {
                         ) : (
                           <span style={styles.mapLinkDisabled}>💬 WhatsApp</span>
                         )}
-                        <span style={styles.dotSep}>·</span>
-                        {confirmDeleteId === n.id ? (
+                        {isAdmin && (
                           <>
-                            <span style={styles.confirmText}>Hapus nasabah ini?</span>
-                            <button style={styles.dangerLinkBtn} onClick={() => deleteNasabah(n.id)}>Ya, hapus</button>
                             <span style={styles.dotSep}>·</span>
-                            <button style={styles.linkBtn} onClick={() => setConfirmDeleteId(null)}>Batal</button>
+                            {confirmDeleteId === n.id ? (
+                              <>
+                                <span style={styles.confirmText}>Hapus nasabah ini?</span>
+                                <button style={styles.dangerLinkBtn} onClick={() => deleteNasabah(n.id)}>Ya, hapus</button>
+                                <span style={styles.dotSep}>·</span>
+                                <button style={styles.linkBtn} onClick={() => setConfirmDeleteId(null)}>Batal</button>
+                              </>
+                            ) : (
+                              <button style={styles.dangerLinkBtn} onClick={() => setConfirmDeleteId(n.id)}>Hapus</button>
+                            )}
                           </>
+                        )}
+                      </div>
+
+                      <div style={styles.exportRow}>
+                        {exportingId === n.id ? (
+                          <span style={styles.confirmText}>Membuat laporan…</span>
                         ) : (
-                          <button style={styles.dangerLinkBtn} onClick={() => setConfirmDeleteId(n.id)}>Hapus</button>
+                          <>
+                            <button style={styles.secondaryBtn} onClick={() => exportReport(n, "pdf")}>📄 Ekspor PDF</button>
+                            <button style={styles.secondaryBtn} onClick={() => exportReport(n, "jpg")}>🖼️ Ekspor JPG</button>
+                          </>
                         )}
                       </div>
 
@@ -683,9 +919,16 @@ function BukuKunjungan() {
                                         📍 Lihat lokasi kunjungan
                                       </a>
                                     )}
-                                    <button style={styles.removeVisitBtn} onClick={() => deleteVisit(n.id, v.id)}>
-                                      Hapus catatan
-                                    </button>
+                                    {isAdmin && (
+                                      <div style={{ display: "flex", gap: 10 }}>
+                                        <button style={styles.editVisitBtn} onClick={() => openVisitForm(n.id, v)}>
+                                          Edit
+                                        </button>
+                                        <button style={styles.removeVisitBtn} onClick={() => deleteVisit(n.id, v.id)}>
+                                          Hapus catatan
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -748,9 +991,9 @@ function BukuKunjungan() {
       )}
 
       {visitForId && (
-        <div style={styles.overlay} onClick={() => setVisitForId(null)}>
+        <div style={styles.overlay} onClick={closeVisitForm}>
           <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <h2 style={styles.modalTitle}>Catat Hasil Kunjungan</h2>
+            <h2 style={styles.modalTitle}>{editingVisitId ? "Edit Catatan Kunjungan" : "Catat Hasil Kunjungan"}</h2>
             <form onSubmit={submitVisit}>
               <label style={styles.label}>Tanggal Kunjungan</label>
               <input type="date" style={styles.input} value={visitDate} onChange={(e) => setVisitDate(e.target.value)} required />
@@ -833,7 +1076,7 @@ function BukuKunjungan() {
               {locError && <div style={styles.warnText}>{locError}</div>}
 
               <div style={styles.modalActions}>
-                <button type="button" style={styles.ghostBtn} onClick={() => setVisitForId(null)}>Batal</button>
+                <button type="button" style={styles.ghostBtn} onClick={closeVisitForm}>Batal</button>
                 <button type="submit" style={styles.primaryBtn} disabled={compressing}>Simpan Catatan</button>
               </div>
             </form>
@@ -847,6 +1090,32 @@ function BukuKunjungan() {
           <button style={styles.lightboxClose} onClick={() => setLightbox(null)}>Tutup ✕</button>
         </div>
       )}
+
+      {showAdminModal && (
+        <div style={styles.overlay} onClick={() => setShowAdminModal(false)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h2 style={styles.modalTitle}>Masuk Mode Admin</h2>
+            <p style={styles.adminHint}>Mode admin diperlukan untuk mengedit atau menghapus data nasabah dan catatan kunjungan.</p>
+            <form onSubmit={submitAdminPassword}>
+              <label style={styles.label}>Kode Admin</label>
+              <input
+                style={styles.input}
+                type="password"
+                inputMode="numeric"
+                value={adminPasswordInput}
+                onChange={(e) => { setAdminPasswordInput(e.target.value); setAdminError(""); }}
+                placeholder="Masukkan kode"
+                autoFocus
+              />
+              {adminError && <div style={styles.warnText}>{adminError}</div>}
+              <div style={styles.modalActions}>
+                <button type="button" style={styles.ghostBtn} onClick={() => setShowAdminModal(false)}>Batal</button>
+                <button type="submit" style={styles.primaryBtn}>Masuk</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -858,6 +1127,9 @@ const styles = {
   stampMark: { width: 46, height: 46, minWidth: 46, borderRadius: "50%", border: "2px solid #C6A75A", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Spectral', serif", fontWeight: 700, fontSize: 15, color: "#C6A75A", letterSpacing: 1, transform: "rotate(-6deg)" },
   title: { fontFamily: "'Spectral', serif", fontWeight: 700, fontSize: 24, color: "#F3EFE2", margin: 0, letterSpacing: 0.2 },
   subtitle: { margin: "4px 0 0", fontSize: 13, color: "#B9B29A" },
+  adminBtn: { background: "transparent", color: "#B9B29A", border: "1px solid #4A5245", borderRadius: 20, padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+  adminBtnActive: { background: "#C6A75A", color: "#232A22", border: "1px solid #C6A75A", borderRadius: 20, padding: "7px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  adminHint: { fontSize: 12.5, color: "#7A7660", marginBottom: 4, lineHeight: 1.5 },
   main: { maxWidth: 720, margin: "0 auto", padding: "22px 20px 0" },
   errorBanner: { background: "#F6E1D8", border: "1px solid #A6432F", color: "#7A2E1F", padding: "10px 14px", borderRadius: 6, fontSize: 13, marginBottom: 16 },
   toolbar: { display: "flex", gap: 10, marginBottom: 8, flexWrap: "wrap" },
@@ -898,7 +1170,8 @@ const styles = {
   detailGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 },
   detailLabel: { fontSize: 11, color: "#9C9680", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 },
   detailValueMono: { fontFamily: "'JetBrains Mono', monospace", fontSize: 13.5, color: "#26241C" },
-  rowActions: { display: "flex", alignItems: "center", gap: 8, marginBottom: 18, flexWrap: "wrap" },
+  rowActions: { display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" },
+  exportRow: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 },
   ledgerSection: { borderTop: "1px dashed #DCD5BC", paddingTop: 16 },
   ledgerHeadRow: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 },
   ledgerTitle: { fontFamily: "'Spectral', serif", fontSize: 15, fontWeight: 600, margin: 0, color: "#3A3728" },
@@ -914,6 +1187,7 @@ const styles = {
   ledgerHasil: { fontSize: 13.5, color: "#4A4736", marginTop: 5, lineHeight: 1.5, whiteSpace: "pre-wrap" },
   ledgerFootRow: { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, flexWrap: "wrap", gap: 8 },
   removeVisitBtn: { background: "none", border: "none", color: "#B0A886", fontSize: 11.5, cursor: "pointer", padding: 0 },
+  editVisitBtn: { background: "none", border: "none", color: "#5A6E4F", fontSize: 11.5, fontWeight: 600, cursor: "pointer", padding: 0 },
   thumbRow: { display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 },
   thumb: { width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid #DCD5BC", cursor: "pointer" },
   thumbWrap: { position: "relative" },
