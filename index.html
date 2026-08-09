@@ -105,7 +105,17 @@ const storage = {
   },
 };
 
-const emptyForm = { nomor: "", nama: "", rekSimpanan: "", rekPembiayaan: "", alamat: "" };
+const emptyForm = { nomor: "", nama: "", rekSimpanan: "", rekPembiayaan: "", alamat: "", ao: "", noWa: "" };
+
+function waLink(noWa, nama) {
+  if (!noWa) return null;
+  let digits = noWa.replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.startsWith("0")) digits = "62" + digits.slice(1);
+  else if (!digits.startsWith("62")) digits = "62" + digits;
+  const text = nama ? `Halo ${nama}, ` : "";
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}
 
 function todayStr() {
   const d = new Date();
@@ -133,6 +143,8 @@ const SEED_NASABAH = [{"nama": "ABDUL AYIS SUTRISNO", "rekSimpanan": "2110520040
   rekSimpanan: n.rekSimpanan || "",
   rekPembiayaan: n.rekPembiayaan || "",
   alamat: n.alamat || "",
+  ao: n.ao || "",
+  noWa: n.noWa || "",
 }));
 
 function compressImage(file, maxDim = 1000, quality = 0.62) {
@@ -174,6 +186,8 @@ function BukuKunjungan() {
   const [loadingDetailId, setLoadingDetailId] = useState(null);
 
   const [query, setQuery] = useState("");
+  const [visitFilter, setVisitFilter] = useState("semua");
+  const [aoFilter, setAoFilter] = useState("");
   const [expandedId, setExpandedId] = useState(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -283,7 +297,7 @@ function BukuKunjungan() {
     setShowForm(true);
   };
   const openEditForm = (n) => {
-    setForm({ nomor: n.nomor, nama: n.nama, rekSimpanan: n.rekSimpanan, rekPembiayaan: n.rekPembiayaan, alamat: n.alamat });
+    setForm({ nomor: n.nomor, nama: n.nama, rekSimpanan: n.rekSimpanan, rekPembiayaan: n.rekPembiayaan, alamat: n.alamat, ao: n.ao || "", noWa: n.noWa || "" });
     setEditingId(n.id);
     setShowForm(true);
   };
@@ -429,16 +443,35 @@ function BukuKunjungan() {
     updateIndex((prev) => prev.map((n) => (n.id === nasabahId ? { ...n, visitCount: nextDetail.kunjungan.length } : n)));
   };
 
-  const filtered = nasabahList.filter((n) => {
+  const aoOptions = Array.from(
+    new Set(nasabahList.map((n) => (n.ao || "").trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
+  const bySearchAndAO = nasabahList.filter((n) => {
     const q = query.trim().toLowerCase();
-    if (!q) return true;
-    return (
+    const matchesQuery =
+      !q ||
       n.nama.toLowerCase().includes(q) ||
       (n.nomor || "").toLowerCase().includes(q) ||
       (n.alamat || "").toLowerCase().includes(q) ||
       (n.rekSimpanan || "").toLowerCase().includes(q) ||
-      (n.rekPembiayaan || "").toLowerCase().includes(q)
-    );
+      (n.rekPembiayaan || "").toLowerCase().includes(q) ||
+      (n.ao || "").toLowerCase().includes(q) ||
+      (n.noWa || "").toLowerCase().includes(q);
+    const matchesAO = !aoFilter || (n.ao || "").trim() === aoFilter;
+    return matchesQuery && matchesAO;
+  });
+
+  const visitCounts = {
+    semua: bySearchAndAO.length,
+    sudah: bySearchAndAO.filter((n) => (n.visitCount || 0) > 0).length,
+    belum: bySearchAndAO.filter((n) => !(n.visitCount || 0)).length,
+  };
+
+  const filtered = bySearchAndAO.filter((n) => {
+    if (visitFilter === "sudah") return (n.visitCount || 0) > 0;
+    if (visitFilter === "belum") return !(n.visitCount || 0);
+    return true;
   });
 
   return (
@@ -467,7 +500,7 @@ function BukuKunjungan() {
         <div style={styles.toolbar}>
           <input
             type="text"
-            placeholder="Cari nama, nomor, rekening, atau alamat..."
+            placeholder="Cari nama, nomor, rekening, alamat, atau AO..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={styles.searchInput}
@@ -475,7 +508,45 @@ function BukuKunjungan() {
           <button style={styles.primaryBtn} onClick={openAddForm}>+ Tambah Nasabah</button>
         </div>
 
-        <div style={styles.countLine}>{nasabahList.length} nasabah tercatat{query ? ` · ${filtered.length} hasil pencarian` : ""}</div>
+        <div style={styles.filterRow}>
+          <div style={styles.tabRow}>
+            <button
+              style={{ ...styles.tabBtn, ...(visitFilter === "semua" ? styles.tabBtnActive : {}) }}
+              onClick={() => setVisitFilter("semua")}
+            >
+              Semua ({visitCounts.semua})
+            </button>
+            <button
+              style={{ ...styles.tabBtn, ...(visitFilter === "sudah" ? styles.tabBtnActive : {}) }}
+              onClick={() => setVisitFilter("sudah")}
+            >
+              Sudah Dikunjungi ({visitCounts.sudah})
+            </button>
+            <button
+              style={{ ...styles.tabBtn, ...(visitFilter === "belum" ? styles.tabBtnActive : {}) }}
+              onClick={() => setVisitFilter("belum")}
+            >
+              Belum Dikunjungi ({visitCounts.belum})
+            </button>
+          </div>
+
+          {aoOptions.length > 0 && (
+            <select
+              style={styles.aoSelect}
+              value={aoFilter}
+              onChange={(e) => setAoFilter(e.target.value)}
+            >
+              <option value="">Semua AO</option>
+              {aoOptions.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div style={styles.countLine}>
+          {nasabahList.length} nasabah tercatat{query || aoFilter ? ` · ${filtered.length} hasil filter` : ""}
+        </div>
 
         {loading ? (
           <div style={styles.emptyState}>Memuat data…</div>
@@ -504,10 +575,13 @@ function BukuKunjungan() {
                       <div style={{ minWidth: 0 }}>
                         <div style={styles.namaText}>{n.nama}</div>
                         <div style={styles.alamatText}>{n.alamat || "Alamat belum diisi"}</div>
+                        {n.ao && <div style={styles.aoTag}>AO: {n.ao}</div>}
                       </div>
                     </div>
                     <div style={styles.cardHeadRight}>
-                      <div style={styles.visitBadge}>{visitCount === 0 ? "Belum dikunjungi" : `${visitCount}x kunjungan`}</div>
+                      <div style={{ ...styles.visitBadge, ...(visitCount === 0 ? {} : styles.visitBadgeDone) }}>
+                        {visitCount === 0 ? "Belum dikunjungi" : `${visitCount}x kunjungan`}
+                      </div>
                       <div style={{ ...styles.chevron, transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>›</div>
                     </div>
                   </div>
@@ -523,6 +597,10 @@ function BukuKunjungan() {
                           <div style={styles.detailLabel}>Rek. Pembiayaan</div>
                           <div style={styles.detailValueMono}>{n.rekPembiayaan || "-"}</div>
                         </div>
+                        <div>
+                          <div style={styles.detailLabel}>AO / Petugas</div>
+                          <div style={styles.detailValueMono}>{n.ao || "-"}</div>
+                        </div>
                       </div>
 
                       <div style={styles.rowActions}>
@@ -534,6 +612,14 @@ function BukuKunjungan() {
                           </a>
                         ) : (
                           <span style={styles.mapLinkDisabled}>🗺️ Peta alamat</span>
+                        )}
+                        <span style={styles.dotSep}>·</span>
+                        {n.noWa && waLink(n.noWa, n.nama) ? (
+                          <a href={waLink(n.noWa, n.nama)} target="_blank" rel="noopener noreferrer" style={styles.waLink}>
+                            💬 WhatsApp
+                          </a>
+                        ) : (
+                          <span style={styles.mapLinkDisabled}>💬 WhatsApp</span>
                         )}
                         <span style={styles.dotSep}>·</span>
                         {confirmDeleteId === n.id ? (
@@ -631,6 +717,27 @@ function BukuKunjungan() {
               <input style={styles.input} value={form.rekPembiayaan} onChange={(e) => setForm({ ...form, rekPembiayaan: e.target.value })} placeholder="Nomor rekening pembiayaan" />
               <label style={styles.label}>Alamat</label>
               <textarea style={{ ...styles.input, minHeight: 70, resize: "vertical" }} value={form.alamat} onChange={(e) => setForm({ ...form, alamat: e.target.value })} placeholder="Alamat domisili" />
+              <label style={styles.label}>Nama AO / Petugas</label>
+              <input
+                style={styles.input}
+                value={form.ao}
+                onChange={(e) => setForm({ ...form, ao: e.target.value })}
+                placeholder="Nama AO yang menangani"
+                list="ao-options"
+              />
+              <datalist id="ao-options">
+                {aoOptions.map((a) => (
+                  <option key={a} value={a} />
+                ))}
+              </datalist>
+              <label style={styles.label}>Nomor WhatsApp</label>
+              <input
+                style={styles.input}
+                value={form.noWa}
+                onChange={(e) => setForm({ ...form, noWa: e.target.value })}
+                placeholder="Contoh: 081234567890"
+                type="tel"
+              />
               <div style={styles.modalActions}>
                 <button type="button" style={styles.ghostBtn} onClick={() => setShowForm(false)}>Batal</button>
                 <button type="submit" style={styles.primaryBtn}>{editingId ? "Simpan Perubahan" : "Tambah Nasabah"}</button>
@@ -754,6 +861,12 @@ const styles = {
   main: { maxWidth: 720, margin: "0 auto", padding: "22px 20px 0" },
   errorBanner: { background: "#F6E1D8", border: "1px solid #A6432F", color: "#7A2E1F", padding: "10px 14px", borderRadius: 6, fontSize: 13, marginBottom: 16 },
   toolbar: { display: "flex", gap: 10, marginBottom: 8, flexWrap: "wrap" },
+  filterRow: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 },
+  tabRow: { display: "flex", gap: 6, flexWrap: "wrap" },
+  tabBtn: { background: "#FBF9F2", color: "#7A7660", border: "1px solid #DCD5BC", borderRadius: 20, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+  tabBtnActive: { background: "#8A6A2F", color: "#FBF9F2", border: "1px solid #8A6A2F" },
+  aoSelect: { padding: "7px 10px", borderRadius: 20, border: "1px solid #DCD5BC", background: "#FBF9F2", fontSize: 12, color: "#5B5745", fontWeight: 600 },
+  aoTag: { fontSize: 11, color: "#8A6A2F", marginTop: 3, fontWeight: 600 },
   countLine: { fontSize: 12, color: "#9C9680", marginBottom: 16 },
   searchInput: { flex: "1 1 240px", padding: "11px 14px", borderRadius: 6, border: "1px solid #CFC7AE", background: "#FBF9F2", fontSize: 14, color: "#26241C" },
   primaryBtn: { background: "#8A6A2F", color: "#FBF9F2", border: "none", borderRadius: 6, padding: "11px 18px", fontSize: 14, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
@@ -762,6 +875,7 @@ const styles = {
   linkBtn: { background: "none", border: "none", color: "#5A6E4F", fontSize: 12.5, fontWeight: 600, cursor: "pointer", padding: 0 },
   dangerLinkBtn: { background: "none", border: "none", color: "#A6432F", fontSize: 12.5, fontWeight: 600, cursor: "pointer", padding: 0 },
   mapLink: { color: "#2F6E63", fontSize: 12.5, fontWeight: 600, textDecoration: "none" },
+  waLink: { color: "#3FA55A", fontSize: 12.5, fontWeight: 600, textDecoration: "none" },
   mapLinkDisabled: { color: "#C7C2AC", fontSize: 12.5, fontWeight: 600 },
   mapLinkSmall: { color: "#2F6E63", fontSize: 11.5, fontWeight: 600, textDecoration: "none" },
   confirmText: { fontSize: 12.5, color: "#5B5745" },
@@ -777,7 +891,8 @@ const styles = {
   namaText: { fontFamily: "'Spectral', serif", fontWeight: 600, fontSize: 16, color: "#26241C" },
   alamatText: { fontSize: 12.5, color: "#7A7660", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 },
   cardHeadRight: { display: "flex", alignItems: "center", gap: 10, flexShrink: 0 },
-  visitBadge: { fontSize: 11.5, fontWeight: 600, color: "#5A6E4F", background: "#E7ECDF", border: "1px solid #C7D4B9", borderRadius: 20, padding: "4px 10px", whiteSpace: "nowrap" },
+  visitBadge: { fontSize: 11.5, fontWeight: 600, color: "#9C7A3C", background: "#F3EAD3", border: "1px solid #E0CFA0", borderRadius: 20, padding: "4px 10px", whiteSpace: "nowrap" },
+  visitBadgeDone: { color: "#5A6E4F", background: "#E7ECDF", border: "1px solid #C7D4B9" },
   chevron: { fontSize: 20, color: "#B0A886", transition: "transform 0.15s ease" },
   cardBody: { borderTop: "1px solid #E4DEC7", padding: "16px" },
   detailGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 },
