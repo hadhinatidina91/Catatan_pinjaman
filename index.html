@@ -180,19 +180,21 @@ function buildReportNode(n, detail) {
     new window.QRCode(qrDiv, { text: mapsAddressUrl(n.alamat), width: 90, height: 90, correctLevel: window.QRCode.CorrectLevel.M });
   }
 
+  const activeVisits = detail.kunjungan.filter((v) => !v.deletedAt);
+
   const ledgerTitle = document.createElement("div");
   ledgerTitle.style.cssText =
     "font-family:'Spectral',serif;font-size:16px;font-weight:700;border-top:1px dashed #DCD5BC;padding-top:16px;margin-bottom:12px;";
-  ledgerTitle.textContent = `Riwayat Kunjungan (${detail.kunjungan.length}x)`;
+  ledgerTitle.textContent = `Riwayat Kunjungan (${activeVisits.length}x)`;
   wrap.appendChild(ledgerTitle);
 
-  if (detail.kunjungan.length === 0) {
+  if (activeVisits.length === 0) {
     const empty = document.createElement("div");
     empty.style.cssText = "font-size:13px;color:#9C9680;font-style:italic;";
     empty.textContent = "Belum ada kunjungan tercatat.";
     wrap.appendChild(empty);
   } else {
-    detail.kunjungan.forEach((v, idx) => {
+    activeVisits.forEach((v, idx) => {
       const item = document.createElement("div");
       item.style.cssText = "margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #E4DEC7;";
 
@@ -321,6 +323,8 @@ function BukuKunjungan() {
   const [adminPasswordInput, setAdminPasswordInput] = useState("");
   const [adminError, setAdminError] = useState("");
   const [editingVisitId, setEditingVisitId] = useState(null);
+  const [showTrashModal, setShowTrashModal] = useState(false);
+  const [expandedTrashVisits, setExpandedTrashVisits] = useState({});
   const [lightbox, setLightbox] = useState(null);
 
   const fileInputRef = useRef(null);
@@ -433,9 +437,24 @@ function BukuKunjungan() {
 
   const deleteNasabah = async (id) => {
     if (!isAdmin) return;
+    updateIndex((prev) => prev.map((n) => (n.id === id ? { ...n, deletedAt: new Date().toISOString() } : n)));
+    setConfirmDeleteId(null);
+    if (expandedId === id) setExpandedId(null);
+  };
+
+  const restoreNasabah = (id) => {
+    if (!isAdmin) return;
+    updateIndex((prev) => prev.map((n) => {
+      if (n.id !== id) return n;
+      const { deletedAt, ...rest } = n;
+      return rest;
+    }));
+  };
+
+  const permanentDeleteNasabah = async (id) => {
+    if (!isAdmin) return;
     updateIndex((prev) => prev.filter((n) => n.id !== id));
     try { await storage.delete(detailKey(id), false); } catch (e) {}
-    setConfirmDeleteId(null);
     if (expandedId === id) setExpandedId(null);
   };
 
@@ -598,10 +617,43 @@ function BukuKunjungan() {
     if (!isAdmin) return;
     const current = detailCache[nasabahId];
     if (!current) return;
+    const nextDetail = {
+      kunjungan: current.kunjungan.map((v) =>
+        v.id === visitId ? { ...v, deletedAt: new Date().toISOString() } : v
+      ),
+    };
+    setDetailCache((prev) => ({ ...prev, [nasabahId]: nextDetail }));
+    await persistDetail(nasabahId, nextDetail);
+    const activeCount = nextDetail.kunjungan.filter((v) => !v.deletedAt).length;
+    updateIndex((prev) => prev.map((n) => (n.id === nasabahId ? { ...n, visitCount: activeCount } : n)));
+  };
+
+  const restoreVisit = async (nasabahId, visitId) => {
+    if (!isAdmin) return;
+    const current = detailCache[nasabahId];
+    if (!current) return;
+    const nextDetail = {
+      kunjungan: current.kunjungan.map((v) => {
+        if (v.id !== visitId) return v;
+        const { deletedAt, ...rest } = v;
+        return rest;
+      }),
+    };
+    setDetailCache((prev) => ({ ...prev, [nasabahId]: nextDetail }));
+    await persistDetail(nasabahId, nextDetail);
+    const activeCount = nextDetail.kunjungan.filter((v) => !v.deletedAt).length;
+    updateIndex((prev) => prev.map((n) => (n.id === nasabahId ? { ...n, visitCount: activeCount } : n)));
+  };
+
+  const permanentDeleteVisit = async (nasabahId, visitId) => {
+    if (!isAdmin) return;
+    const current = detailCache[nasabahId];
+    if (!current) return;
     const nextDetail = { kunjungan: current.kunjungan.filter((v) => v.id !== visitId) };
     setDetailCache((prev) => ({ ...prev, [nasabahId]: nextDetail }));
     await persistDetail(nasabahId, nextDetail);
-    updateIndex((prev) => prev.map((n) => (n.id === nasabahId ? { ...n, visitCount: nextDetail.kunjungan.length } : n)));
+    const activeCount = nextDetail.kunjungan.filter((v) => !v.deletedAt).length;
+    updateIndex((prev) => prev.map((n) => (n.id === nasabahId ? { ...n, visitCount: activeCount } : n)));
   };
 
   const exportReport = async (n, format) => {
@@ -659,7 +711,10 @@ function BukuKunjungan() {
     new Set(nasabahList.map((n) => (n.ao || "").trim()).filter(Boolean))
   ).sort((a, b) => a.localeCompare(b));
 
+  const trashedNasabah = nasabahList.filter((n) => n.deletedAt);
+
   const bySearchAndAO = nasabahList.filter((n) => {
+    if (n.deletedAt) return false;
     const q = query.trim().toLowerCase();
     const matchesQuery =
       !q ||
@@ -703,6 +758,11 @@ function BukuKunjungan() {
             <h1 style={styles.title}>Buku Kunjungan Nasabah</h1>
             <p style={styles.subtitle}>Catatan lapangan kunjungan, foto &amp; lokasi nasabah</p>
           </div>
+          {isAdmin && (
+            <button style={styles.trashHeaderBtn} onClick={() => setShowTrashModal(true)}>
+              🗑️ Sampah{trashedNasabah.length > 0 ? ` (${trashedNasabah.length})` : ""}
+            </button>
+          )}
           {isAdmin ? (
             <button style={styles.adminBtnActive} onClick={lockAdmin}>🔓 Admin Aktif</button>
           ) : (
@@ -784,6 +844,9 @@ function BukuKunjungan() {
               const isOpen = expandedId === n.id;
               const detail = detailCache[n.id];
               const visitCount = n.visitCount || 0;
+              const activeKunjungan = detail ? detail.kunjungan.filter((v) => !v.deletedAt) : [];
+              const deletedKunjungan = detail ? detail.kunjungan.filter((v) => v.deletedAt) : [];
+              const showVisitTrash = !!expandedTrashVisits[n.id];
               return (
                 <div key={n.id} style={styles.card}>
                   <div style={styles.cardHead} onClick={() => toggleExpand(n.id)}>
@@ -847,13 +910,13 @@ function BukuKunjungan() {
                             <span style={styles.dotSep}>·</span>
                             {confirmDeleteId === n.id ? (
                               <>
-                                <span style={styles.confirmText}>Hapus nasabah ini?</span>
-                                <button style={styles.dangerLinkBtn} onClick={() => deleteNasabah(n.id)}>Ya, hapus</button>
+                                <span style={styles.confirmText}>Hapus SELURUH DATA "{n.nama}" beserta riwayat kunjungannya?</span>
+                                <button style={styles.dangerLinkBtn} onClick={() => deleteNasabah(n.id)}>Ya, hapus nasabah ini</button>
                                 <span style={styles.dotSep}>·</span>
                                 <button style={styles.linkBtn} onClick={() => setConfirmDeleteId(null)}>Batal</button>
                               </>
                             ) : (
-                              <button style={styles.dangerLinkBtn} onClick={() => setConfirmDeleteId(n.id)}>Hapus</button>
+                              <button style={styles.dangerLinkBtn} onClick={() => setConfirmDeleteId(n.id)}>🗑️ Hapus Data Nasabah</button>
                             )}
                           </>
                         )}
@@ -880,11 +943,11 @@ function BukuKunjungan() {
 
                         {loadingDetailId === n.id ? (
                           <div style={styles.noVisit}>Memuat riwayat…</div>
-                        ) : !detail || detail.kunjungan.length === 0 ? (
+                        ) : !detail || activeKunjungan.length === 0 ? (
                           <div style={styles.noVisit}>Belum ada catatan kunjungan.</div>
                         ) : (
                           <div style={styles.ledger}>
-                            {detail.kunjungan.map((v, idx) => (
+                            {activeKunjungan.map((v, idx) => (
                               <div key={v.id} style={styles.ledgerRow}>
                                 <div style={styles.stamp}><div style={styles.stampNum}>{idx + 1}</div></div>
                                 <div style={styles.ledgerContent}>
@@ -925,7 +988,7 @@ function BukuKunjungan() {
                                           Edit
                                         </button>
                                         <button style={styles.removeVisitBtn} onClick={() => deleteVisit(n.id, v.id)}>
-                                          Hapus catatan
+                                          🗑️ Hapus Laporan Ini
                                         </button>
                                       </div>
                                     )}
@@ -933,6 +996,44 @@ function BukuKunjungan() {
                                 </div>
                               </div>
                             ))}
+                          </div>
+                        )}
+
+                        {isAdmin && deletedKunjungan.length > 0 && (
+                          <div style={styles.visitTrashBox}>
+                            <button
+                              style={styles.visitTrashToggle}
+                              onClick={() => setExpandedTrashVisits((prev) => ({ ...prev, [n.id]: !prev[n.id] }))}
+                            >
+                              🗑️ Laporan Terhapus ({deletedKunjungan.length}) {showVisitTrash ? "▲" : "▼"}
+                            </button>
+                            {showVisitTrash && (
+                              <div style={styles.visitTrashList}>
+                                {deletedKunjungan.map((v) => (
+                                  <div key={v.id} style={styles.visitTrashItem}>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={styles.ledgerDate}>{formatTanggal(v.tanggal)}</div>
+                                      <div style={styles.visitTrashHasil}>{v.hasil}</div>
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                                      <button style={styles.editVisitBtn} onClick={() => restoreVisit(n.id, v.id)}>
+                                        ↩️ Pulihkan
+                                      </button>
+                                      <button
+                                        style={styles.removeVisitBtn}
+                                        onClick={() => {
+                                          if (window.confirm("Hapus permanen laporan kunjungan ini? Tidak bisa dipulihkan lagi.")) {
+                                            permanentDeleteVisit(n.id, v.id);
+                                          }
+                                        }}
+                                      >
+                                        Hapus Permanen
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1116,6 +1217,49 @@ function BukuKunjungan() {
           </div>
         </div>
       )}
+
+      {showTrashModal && (
+        <div style={styles.overlay} onClick={() => setShowTrashModal(false)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h2 style={styles.modalTitle}>🗑️ Sampah Nasabah</h2>
+            <p style={styles.adminHint}>
+              Nasabah yang dihapus disimpan di sini dulu, tidak langsung hilang. Bisa dipulihkan kapan saja.
+            </p>
+            {trashedNasabah.length === 0 ? (
+              <div style={styles.noVisit}>Sampah kosong.</div>
+            ) : (
+              <div style={styles.trashList}>
+                {trashedNasabah.map((n) => (
+                  <div key={n.id} style={styles.trashItem}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={styles.namaText}>{n.nama}</div>
+                      <div style={styles.alamatText}>
+                        Dihapus {n.deletedAt ? formatTanggal(n.deletedAt.slice(0, 10)) : "-"}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
+                      <button style={styles.secondaryBtn} onClick={() => restoreNasabah(n.id)}>↩️ Pulihkan</button>
+                      <button
+                        style={styles.dangerLinkBtn}
+                        onClick={() => {
+                          if (window.confirm(`Hapus PERMANEN "${n.nama}" beserta seluruh riwayat kunjungannya? Tidak bisa dipulihkan lagi.`)) {
+                            permanentDeleteNasabah(n.id);
+                          }
+                        }}
+                      >
+                        Hapus Permanen
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={styles.modalActions}>
+              <button type="button" style={styles.ghostBtn} onClick={() => setShowTrashModal(false)}>Tutup</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1123,13 +1267,21 @@ function BukuKunjungan() {
 const styles = {
   page: { minHeight: "100vh", background: "#EFEBDE", fontFamily: "'Inter', sans-serif", color: "#26241C", paddingBottom: 60 },
   header: { background: "#232A22", borderBottom: "3px double #8A6A2F" },
-  headerInner: { maxWidth: 720, margin: "0 auto", padding: "22px 20px", display: "flex", alignItems: "center", gap: 16 },
+  headerInner: { maxWidth: 720, margin: "0 auto", padding: "22px 20px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
   stampMark: { width: 46, height: 46, minWidth: 46, borderRadius: "50%", border: "2px solid #C6A75A", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Spectral', serif", fontWeight: 700, fontSize: 15, color: "#C6A75A", letterSpacing: 1, transform: "rotate(-6deg)" },
   title: { fontFamily: "'Spectral', serif", fontWeight: 700, fontSize: 24, color: "#F3EFE2", margin: 0, letterSpacing: 0.2 },
   subtitle: { margin: "4px 0 0", fontSize: 13, color: "#B9B29A" },
   adminBtn: { background: "transparent", color: "#B9B29A", border: "1px solid #4A5245", borderRadius: 20, padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
   adminBtnActive: { background: "#C6A75A", color: "#232A22", border: "1px solid #C6A75A", borderRadius: 20, padding: "7px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
   adminHint: { fontSize: 12.5, color: "#7A7660", marginBottom: 4, lineHeight: 1.5 },
+  trashHeaderBtn: { background: "transparent", color: "#B9B29A", border: "1px solid #4A5245", borderRadius: 20, padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+  trashList: { display: "flex", flexDirection: "column", gap: 10, maxHeight: "50vh", overflowY: "auto", marginBottom: 4 },
+  trashItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#F3EFE2", border: "1px solid #E4DEC7", borderRadius: 8, flexWrap: "wrap" },
+  visitTrashBox: { marginTop: 16, paddingTop: 12, borderTop: "1px dashed #DCD5BC" },
+  visitTrashToggle: { background: "none", border: "none", color: "#9C7A3C", fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 },
+  visitTrashList: { display: "flex", flexDirection: "column", gap: 8, marginTop: 10 },
+  visitTrashItem: { display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#F3EFE2", border: "1px solid #E4DEC7", borderRadius: 6, flexWrap: "wrap" },
+  visitTrashHasil: { fontSize: 12, color: "#7A7660", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   main: { maxWidth: 720, margin: "0 auto", padding: "22px 20px 0" },
   errorBanner: { background: "#F6E1D8", border: "1px solid #A6432F", color: "#7A2E1F", padding: "10px 14px", borderRadius: 6, fontSize: 13, marginBottom: 16 },
   toolbar: { display: "flex", gap: 10, marginBottom: 8, flexWrap: "wrap" },
