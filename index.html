@@ -84,6 +84,7 @@ const ordinalLabel = (n) => (n <= 10 ? ORDINALS[n] : `Ke-${n}`);
 
 const INDEX_KEY = "nasabah-index-v2";
 const detailKey = (id) => `nasabah-detail-v2/${id}`;
+const RENCANA_INDEX_KEY = "rencana-kunjungan-v1";
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
 const FB_ROOT = "buku-kunjungan-nasabah";
@@ -702,11 +703,23 @@ function BukuKunjungan() {
   const [expandedTrashVisits, setExpandedTrashVisits] = useState({});
   const [lightbox, setLightbox] = useState(null);
 
+  const [mainView, setMainView] = useState("nasabah");
+  const [rencanaList, setRencanaList] = useState([]);
+  const [showRencanaForm, setShowRencanaForm] = useState(false);
+  const [rencanaForm, setRencanaForm] = useState({ nama: "", ao: "", tanggal: todayStr() });
+  const [rencanaSelectedIds, setRencanaSelectedIds] = useState([]);
+  const [rencanaPickerQuery, setRencanaPickerQuery] = useState("");
+  const [expandedRencanaId, setExpandedRencanaId] = useState(null);
+  const [expandedRencanaNasabahId, setExpandedRencanaNasabahId] = useState(null);
+  const [confirmDeleteRencanaId, setConfirmDeleteRencanaId] = useState(null);
+
   const fileInputRef = useRef(null);
   const galleryInputRef = useRef(null);
   const mapDivRef = useRef(null);
   const leafletMapRef = useRef(null);
   const leafletMarkerRef = useRef(null);
+  const rencanaMapDivRef = useRef(null);
+  const rencanaLeafletMapRef = useRef(null);
 
   useEffect(() => {
     if (!window.fbDb) {
@@ -736,6 +749,42 @@ function BukuKunjungan() {
     ref.on("value", onValue, onError);
     return () => ref.off("value", onValue);
   }, []);
+
+  useEffect(() => {
+    if (!window.fbDb) return;
+    const ref = window.fbDb.ref(fbPath(RENCANA_INDEX_KEY));
+    const onValue = (snap) => {
+      if (snap.exists() && snap.val()) {
+        try {
+          setRencanaList(JSON.parse(snap.val()));
+        } catch (e) {
+          setRencanaList([]);
+        }
+      } else {
+        setRencanaList([]);
+      }
+    };
+    ref.on("value", onValue);
+    return () => ref.off("value", onValue);
+  }, []);
+
+  const persistRencanaList = useCallback(async (list) => {
+    try {
+      if (!window.fbDb) throw new Error("no db");
+      await window.fbDb.ref(fbPath(RENCANA_INDEX_KEY)).set(JSON.stringify(list));
+      setSaveError("");
+    } catch (e) {
+      setSaveError("Gagal menyimpan rencana kunjungan.");
+    }
+  }, []);
+
+  const updateRencanaList = (updater) => {
+    setRencanaList((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      persistRencanaList(next);
+      return next;
+    });
+  };
 
   const persistIndex = useCallback(async (list) => {
     try {
@@ -783,6 +832,68 @@ function BukuKunjungan() {
       return;
     }
     setExpandedId(id);
+    if (!detailCache[id]) await loadDetail(id);
+  };
+
+  const openRencanaForm = () => {
+    setRencanaForm({ nama: "", ao: aoFilter || "", tanggal: todayStr() });
+    setRencanaSelectedIds([]);
+    setRencanaPickerQuery("");
+    setShowRencanaForm(true);
+  };
+
+  const toggleRencanaSelect = (id) => {
+    setRencanaSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const submitRencanaForm = (e) => {
+    e.preventDefault();
+    if (!rencanaForm.nama.trim() || rencanaSelectedIds.length === 0) return;
+    const newRencana = {
+      id: uid(),
+      nama: rencanaForm.nama.trim(),
+      ao: rencanaForm.ao.trim(),
+      tanggal: rencanaForm.tanggal || todayStr(),
+      nasabahIds: rencanaSelectedIds,
+      createdAt: new Date().toISOString(),
+    };
+    updateRencanaList((prev) => [newRencana, ...prev]);
+    setShowRencanaForm(false);
+  };
+
+  const deleteRencana = (id) => {
+    updateRencanaList((prev) => prev.filter((r) => r.id !== id));
+    if (expandedRencanaId === id) {
+      setExpandedRencanaId(null);
+      setExpandedRencanaNasabahId(null);
+    }
+    setConfirmDeleteRencanaId(null);
+  };
+
+  const toggleExpandRencana = async (id) => {
+    if (expandedRencanaId === id) {
+      setExpandedRencanaId(null);
+      setExpandedRencanaNasabahId(null);
+      return;
+    }
+    setExpandedRencanaId(id);
+    setExpandedRencanaNasabahId(null);
+    const r = rencanaList.find((x) => x.id === id);
+    if (r) {
+      for (const nid of r.nasabahIds) {
+        if (!detailCache[nid]) await loadDetail(nid);
+      }
+    }
+  };
+
+  const toggleExpandRencanaNasabah = async (id) => {
+    if (expandedRencanaNasabahId === id) {
+      setExpandedRencanaNasabahId(null);
+      return;
+    }
+    setExpandedRencanaNasabahId(id);
     if (!detailCache[id]) await loadDetail(id);
   };
 
@@ -901,6 +1012,39 @@ function BukuKunjungan() {
       leafletMarkerRef.current = null;
     };
   }, [visitForId]);
+
+  useEffect(() => {
+    if (!expandedRencanaNasabahId || !rencanaMapDivRef.current || !window.L) return;
+    const detail = detailCache[expandedRencanaNasabahId];
+    const visitsWithLoc = detail
+      ? detail.kunjungan.filter((v) => !v.deletedAt && v.location)
+      : [];
+    if (visitsWithLoc.length === 0) return;
+    const last = visitsWithLoc[visitsWithLoc.length - 1];
+    const map = window.L.map(rencanaMapDivRef.current, { zoomControl: true }).setView(
+      [last.location.lat, last.location.lng],
+      15
+    );
+    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map);
+    visitsWithLoc.forEach((v, idx) => {
+      window.L.marker([v.location.lat, v.location.lng])
+        .addTo(map)
+        .bindPopup(`Kunjungan ${ordinalLabel(idx + 1)}<br/>${formatTanggal(v.tanggal)}`);
+    });
+    if (visitsWithLoc.length > 1) {
+      const bounds = window.L.latLngBounds(visitsWithLoc.map((v) => [v.location.lat, v.location.lng]));
+      map.fitBounds(bounds, { padding: [30, 30] });
+    }
+    rencanaLeafletMapRef.current = map;
+    setTimeout(() => map.invalidateSize(), 150);
+    return () => {
+      map.remove();
+      rencanaLeafletMapRef.current = null;
+    };
+  }, [expandedRencanaNasabahId, detailCache]);
 
   const handlePhotoChange = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -1221,6 +1365,23 @@ function BukuKunjungan() {
           </div>
         )}
 
+        <div style={styles.mainTabRow}>
+          <button
+            style={{ ...styles.mainTabBtn, ...(mainView === "nasabah" ? styles.mainTabBtnActive : {}) }}
+            onClick={() => setMainView("nasabah")}
+          >
+            📋 Data Nasabah
+          </button>
+          <button
+            style={{ ...styles.mainTabBtn, ...(mainView === "rencana" ? styles.mainTabBtnActive : {}) }}
+            onClick={() => setMainView("rencana")}
+          >
+            🗓️ Rencana Kunjungan Harian{rencanaList.length > 0 ? ` (${rencanaList.length})` : ""}
+          </button>
+        </div>
+
+        {mainView === "nasabah" && (
+        <>
         <div style={styles.toolbar}>
           <input
             type="text"
@@ -1491,6 +1652,202 @@ function BukuKunjungan() {
             })}
           </div>
         )}
+        </>
+        )}
+
+        {mainView === "rencana" && (
+          <div>
+            <div style={styles.toolbar}>
+              <p style={{ ...styles.adminHint, flex: 1, minWidth: 220, margin: 0 }}>
+                Buat rencana kunjungan harian lalu pilih nasabah yang akan dikunjungi. Klik nama rencana untuk melihat daftarnya, dan klik nama nasabah untuk melihat riwayat kunjungan beserta peta lokasinya.
+              </p>
+              <button style={styles.primaryBtn} onClick={openRencanaForm}>+ Buat Rencana Kunjungan</button>
+            </div>
+
+            {rencanaList.length === 0 ? (
+              <div style={styles.emptyState}>
+                <div style={styles.emptyIcon}>🗓️</div>
+                <p style={styles.emptyText}>Belum ada rencana kunjungan.</p>
+              </div>
+            ) : (
+              <div style={styles.cardList}>
+                {rencanaList
+                  .slice()
+                  .sort(
+                    (a, b) =>
+                      (b.tanggal || "").localeCompare(a.tanggal || "") ||
+                      (b.createdAt || "").localeCompare(a.createdAt || "")
+                  )
+                  .map((r) => {
+                    const isOpen = expandedRencanaId === r.id;
+                    const members = r.nasabahIds
+                      .map((id) => nasabahList.find((n) => n.id === id))
+                      .filter(Boolean);
+                    const visitedCount = members.filter((n) => {
+                      const d = detailCache[n.id];
+                      return d && d.kunjungan.some((v) => !v.deletedAt && v.tanggal === r.tanggal);
+                    }).length;
+                    return (
+                      <div key={r.id} style={styles.card}>
+                        <div style={styles.cardHead} onClick={() => toggleExpandRencana(r.id)}>
+                          <div style={styles.cardHeadLeft}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={styles.namaText}>{r.nama}</div>
+                              <div style={styles.alamatText}>
+                                {formatTanggal(r.tanggal)}
+                                {r.ao ? ` · AO: ${r.ao}` : ""} · {members.length} nasabah
+                              </div>
+                            </div>
+                          </div>
+                          <div style={styles.cardHeadRight}>
+                            <div style={{ ...styles.visitBadge, ...(visitedCount > 0 ? styles.visitBadgeDone : {}) }}>
+                              {visitedCount}/{members.length} dikunjungi
+                            </div>
+                            <div style={{ ...styles.chevron, transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}>›</div>
+                          </div>
+                        </div>
+
+                        {isOpen && (
+                          <div style={styles.cardBody}>
+                            <div style={styles.rowActions}>
+                              {confirmDeleteRencanaId === r.id ? (
+                                <>
+                                  <span style={styles.confirmText}>Hapus rencana "{r.nama}"?</span>
+                                  <button style={styles.dangerLinkBtn} onClick={() => deleteRencana(r.id)}>Ya, hapus</button>
+                                  <span style={styles.dotSep}>·</span>
+                                  <button style={styles.linkBtn} onClick={() => setConfirmDeleteRencanaId(null)}>Batal</button>
+                                </>
+                              ) : (
+                                <button style={styles.dangerLinkBtn} onClick={() => setConfirmDeleteRencanaId(r.id)}>
+                                  🗑️ Hapus Rencana
+                                </button>
+                              )}
+                            </div>
+
+                            {members.length === 0 ? (
+                              <div style={styles.noVisit}>Nasabah pada rencana ini sudah tidak ada / terhapus.</div>
+                            ) : (
+                              <div style={styles.ledger}>
+                                {members.map((n) => {
+                                  const d = detailCache[n.id];
+                                  const activeVisits = d ? d.kunjungan.filter((v) => !v.deletedAt) : [];
+                                  const visitedToday = activeVisits.some((v) => v.tanggal === r.tanggal);
+                                  const isNasabahOpen = expandedRencanaNasabahId === n.id;
+                                  const visitsWithLoc = activeVisits.filter((v) => v.location);
+                                  return (
+                                    <div key={n.id} style={styles.rencanaNasabahRow}>
+                                      <div style={styles.cardHead} onClick={() => toggleExpandRencanaNasabah(n.id)}>
+                                        <div style={styles.cardHeadLeft}>
+                                          <div style={{ minWidth: 0 }}>
+                                            <div style={styles.namaText}>{n.nama}</div>
+                                            <div style={styles.alamatText}>{n.alamat || "Alamat belum diisi"}</div>
+                                          </div>
+                                        </div>
+                                        <div style={styles.cardHeadRight}>
+                                          <div style={{ ...styles.visitBadge, ...(visitedToday ? styles.visitBadgeDone : {}) }}>
+                                            {visitedToday ? "✓ Sudah" : "Belum"}
+                                          </div>
+                                          <div style={{ ...styles.chevron, transform: isNasabahOpen ? "rotate(90deg)" : "rotate(0deg)" }}>›</div>
+                                        </div>
+                                      </div>
+
+                                      {isNasabahOpen && (
+                                        <div style={styles.cardBody}>
+                                          <div style={styles.rowActions}>
+                                            {n.alamat ? (
+                                              <a href={mapsAddressUrl(n.alamat)} target="_blank" rel="noopener noreferrer" style={styles.mapLink}>
+                                                🗺️ Peta alamat
+                                              </a>
+                                            ) : (
+                                              <span style={styles.mapLinkDisabled}>🗺️ Peta alamat</span>
+                                            )}
+                                            <span style={styles.dotSep}>·</span>
+                                            {n.noWa && waLink(n.noWa, n.nama) ? (
+                                              <a href={waLink(n.noWa, n.nama)} target="_blank" rel="noopener noreferrer" style={styles.waLink}>
+                                                💬 WhatsApp
+                                              </a>
+                                            ) : (
+                                              <span style={styles.mapLinkDisabled}>💬 WhatsApp</span>
+                                            )}
+                                            <span style={styles.dotSep}>·</span>
+                                            <button style={styles.secondaryBtn} onClick={() => openVisitForm(n.id)}>
+                                              + Catat Kunjungan {ordinalLabel((n.visitCount || 0) + 1)}
+                                            </button>
+                                          </div>
+
+                                          <div style={styles.detailLabel}>Peta Titik Lokasi Kunjungan</div>
+                                          {loadingDetailId === n.id ? (
+                                            <div style={styles.noVisit}>Memuat…</div>
+                                          ) : visitsWithLoc.length === 0 ? (
+                                            <div style={styles.noVisit}>Belum ada titik lokasi kunjungan tercatat untuk nasabah ini.</div>
+                                          ) : (
+                                            <div style={styles.mapBox} ref={rencanaMapDivRef}></div>
+                                          )}
+
+                                          <div style={{ ...styles.ledgerSection, marginTop: 14 }}>
+                                            <h3 style={styles.ledgerTitle}>Riwayat Kunjungan ({activeVisits.length}x)</h3>
+                                            {loadingDetailId === n.id ? (
+                                              <div style={styles.noVisit}>Memuat riwayat…</div>
+                                            ) : activeVisits.length === 0 ? (
+                                              <div style={styles.noVisit}>Belum ada catatan kunjungan.</div>
+                                            ) : (
+                                              <div style={styles.ledger}>
+                                                {activeVisits.map((v, idx) => (
+                                                  <div key={v.id} style={styles.ledgerRow}>
+                                                    <div style={styles.stamp}><div style={styles.stampNum}>{idx + 1}</div></div>
+                                                    <div style={styles.ledgerContent}>
+                                                      <div style={styles.ledgerTop}>
+                                                        <span style={styles.ledgerOrdinal}>Kunjungan {ordinalLabel(idx + 1)}</span>
+                                                        <span style={styles.ledgerDate}>{formatTanggal(v.tanggal)}</span>
+                                                      </div>
+                                                      <div style={styles.ledgerHasil}>{v.hasil}</div>
+                                                      {v.photos && v.photos.length > 0 && (
+                                                        <div style={styles.thumbRow}>
+                                                          {v.photos.map((p, pi) => (
+                                                            <img
+                                                              key={pi}
+                                                              src={p}
+                                                              alt={`Foto kunjungan ${idx + 1}`}
+                                                              style={styles.thumb}
+                                                              onClick={() => setLightbox(p)}
+                                                            />
+                                                          ))}
+                                                        </div>
+                                                      )}
+                                                      {v.location && (
+                                                        <div style={styles.ledgerFootRow}>
+                                                          <a
+                                                            href={mapsCoordUrl(v.location.lat, v.location.lng)}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            style={styles.mapLinkSmall}
+                                                          >
+                                                            📍 Lihat lokasi kunjungan
+                                                          </a>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {showForm && (
@@ -1532,6 +1889,81 @@ function BukuKunjungan() {
               <div style={styles.modalActions}>
                 <button type="button" style={styles.ghostBtn} onClick={() => setShowForm(false)}>Batal</button>
                 <button type="submit" style={styles.primaryBtn}>{editingId ? "Simpan Perubahan" : "Tambah Nasabah"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showRencanaForm && (
+        <div style={styles.overlay} onClick={() => setShowRencanaForm(false)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h2 style={styles.modalTitle}>Buat Rencana Kunjungan Harian</h2>
+            <form onSubmit={submitRencanaForm}>
+              <label style={styles.label}>Nama Rencana *</label>
+              <input
+                style={styles.input}
+                value={rencanaForm.nama}
+                onChange={(e) => setRencanaForm({ ...rencanaForm, nama: e.target.value })}
+                placeholder="Contoh: Kunjungan Rejosari Barat"
+                required
+                autoFocus
+              />
+              <label style={styles.label}>Tanggal Kunjungan</label>
+              <input
+                type="date"
+                style={styles.input}
+                value={rencanaForm.tanggal}
+                onChange={(e) => setRencanaForm({ ...rencanaForm, tanggal: e.target.value })}
+              />
+              <label style={styles.label}>Nama AO / Marketing</label>
+              <input
+                style={styles.input}
+                value={rencanaForm.ao}
+                onChange={(e) => setRencanaForm({ ...rencanaForm, ao: e.target.value })}
+                placeholder="Nama AO yang akan berkunjung"
+                list="ao-options"
+              />
+
+              <label style={styles.label}>
+                Pilih Nasabah yang Akan Dikunjungi * ({rencanaSelectedIds.length} dipilih)
+              </label>
+              <input
+                style={styles.input}
+                value={rencanaPickerQuery}
+                onChange={(e) => setRencanaPickerQuery(e.target.value)}
+                placeholder="Cari nama atau alamat nasabah..."
+              />
+              <div style={styles.pickerList}>
+                {nasabahList
+                  .filter((n) => !n.deletedAt)
+                  .filter((n) => {
+                    const q = rencanaPickerQuery.trim().toLowerCase();
+                    return !q || n.nama.toLowerCase().includes(q) || (n.alamat || "").toLowerCase().includes(q);
+                  })
+                  .map((n) => (
+                    <label key={n.id} style={styles.pickerItem}>
+                      <input
+                        type="checkbox"
+                        checked={rencanaSelectedIds.includes(n.id)}
+                        onChange={() => toggleRencanaSelect(n.id)}
+                      />
+                      <span style={{ marginLeft: 8, minWidth: 0 }}>
+                        <b>{n.nama}</b>
+                        <span style={{ color: "#9C9680" }}> — {n.alamat || "alamat belum diisi"}</span>
+                      </span>
+                    </label>
+                  ))}
+                {nasabahList.filter((n) => !n.deletedAt).length === 0 && (
+                  <div style={styles.noVisit}>Belum ada nasabah untuk dipilih.</div>
+                )}
+              </div>
+
+              <div style={styles.modalActions}>
+                <button type="button" style={styles.ghostBtn} onClick={() => setShowRencanaForm(false)}>Batal</button>
+                <button type="submit" style={styles.primaryBtn} disabled={!rencanaForm.nama.trim() || rencanaSelectedIds.length === 0}>
+                  Simpan Rencana
+                </button>
               </div>
             </form>
           </div>
@@ -1730,6 +2162,12 @@ const styles = {
   visitTrashItem: { display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#F3EFE2", border: "1px solid #E4DEC7", borderRadius: 6, flexWrap: "wrap" },
   visitTrashHasil: { fontSize: 12, color: "#7A7660", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   main: { maxWidth: 720, margin: "0 auto", padding: "22px 20px 0" },
+  mainTabRow: { display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" },
+  mainTabBtn: { background: "#FBF9F2", color: "#5B5745", border: "1px solid #DCD5BC", borderRadius: 20, padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+  mainTabBtnActive: { background: "#232A22", color: "#F3EFE2", border: "1px solid #232A22" },
+  pickerList: { maxHeight: 220, overflowY: "auto", border: "1px solid #CFC7AE", borderRadius: 6, background: "#FFFEFA", padding: 8, marginTop: 6, display: "flex", flexDirection: "column", gap: 6 },
+  pickerItem: { display: "flex", alignItems: "center", fontSize: 13, padding: "5px 4px", cursor: "pointer", borderRadius: 4 },
+  rencanaNasabahRow: { border: "1px solid #E4DEC7", borderRadius: 6, overflow: "hidden" },
   errorBanner: { background: "#F6E1D8", border: "1px solid #A6432F", color: "#7A2E1F", padding: "10px 14px", borderRadius: 6, fontSize: 13, marginBottom: 16 },
   importBanner: { background: "#E7ECDF", border: "1px solid #C7D4B9", color: "#3A4A32", padding: "12px 14px", borderRadius: 6, fontSize: 13, marginBottom: 16 },
   importNotFoundList: { fontSize: 12, color: "#5B5745", marginTop: 6 },
