@@ -912,8 +912,7 @@ function BukuKunjungan() {
     const byRek = {}, byName = {};
     nasabahList.forEach((n) => {
       if (n.rekPembiayaan) byRek[String(n.rekPembiayaan).trim()] = n;
-      const k = normName(n.nama);
-      if (k && !byName[k]) byName[k] = n;
+      else { const k = normName(n.nama); if (k && !byName[k]) byName[k] = n; }
     });
     const rows = pembData.rows.map((r) => ({ ...r, n: byRek[r.rek] || byName[normName(r.nama)] || null }));
     const byColl = [0, 1, 2, 3, 4].map((c) => ({ c, count: 0, os: 0 }));
@@ -945,19 +944,15 @@ function BukuKunjungan() {
         const byRek = {}, byName = {};
         list.forEach((n) => {
           if (n.rekPembiayaan) byRek[String(n.rekPembiayaan).trim()] = n;
-          const k = normName(n.nama);
-          if (k && !byName[k]) byName[k] = n;
+      else { const k = normName(n.nama); if (k && !byName[k]) byName[k] = n; }
         });
         rows.forEach((r) => {
           if (byRek[r.rek]) return;
           const k = normName(r.nama);
           const hit = k === "TANPANAMA" ? null : byName[k];
-          if (hit) {
-            if (!hit.rekPembiayaan) { hit.rekPembiayaan = r.rek; byRek[r.rek] = hit; filled++; }
-            return;
-          }
+          if (hit) { hit.rekPembiayaan = r.rek; byRek[r.rek] = hit; delete byName[k]; filled++; return; }
           const nn = { id: uid(), nomor: "", nama: r.nama, rekSimpanan: "", rekPembiayaan: r.rek, alamat: "", ao: r.ao === "TANPA AO" ? "" : r.ao, noWa: "", visitCount: 0 };
-          list.push(nn); byRek[r.rek] = nn; if (k) byName[k] = nn; added++;
+          list.push(nn); byRek[r.rek] = nn; added++;
         });
         return added || filled ? JSON.stringify(list) : undefined;
       });
