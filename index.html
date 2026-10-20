@@ -122,6 +122,56 @@ function parsePembiayaanWorkbook(wb) {
   return { rows, months };
 }
 
+const RAPAT_KEY = "resume-rapat-v1";
+const HARI_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
+const hariFrom = (iso) => { const d = new Date(iso + "T00:00:00"); return isNaN(d) ? "" : HARI_ID[d.getDay()]; };
+const kodeFrom = (iso) => "RR-" + String(iso || "").replace(/-/g, "");
+const escHtml = (t) => String(t == null ? "" : t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function rapatPdf(arr, fname) {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF("p", "pt", "a4");
+  const M = 40, W = 515;
+  let y = 50;
+  const line = (txt, size, bold, indent) => {
+    pdf.setFont("helvetica", bold ? "bold" : "normal"); pdf.setFontSize(size);
+    pdf.splitTextToSize(String(txt), W - (indent || 0)).forEach((l) => {
+      if (y > 790) { pdf.addPage(); y = 50; }
+      pdf.text(l, M + (indent || 0), y); y += size + 4;
+    });
+  };
+  arr.forEach((r, ri) => {
+    if (ri > 0) { pdf.addPage(); y = 50; }
+    line("RESUME RAPAT", 16, true);
+    y += 4;
+    line(`Kode Rapat : ${r.kode}`, 11, false);
+    line(`Hari / Tanggal : ${r.hari}, ${formatTanggal(r.tanggal)}`, 11, false);
+    y += 6; pdf.line(M, y, M + W, y); y += 16;
+    if (!r.items.length) line("Belum ada debitur.", 11, false);
+    r.items.forEach((it, i) => {
+      line(`${i + 1}. ${it.nama}`, 12, true);
+      line(`No. Rekening : ${it.rek || "-"}`, 10.5, false, 16);
+      line(`Alamat : ${it.alamat || "-"}`, 10.5, false, 16);
+      line(`Tindakan : ${it.tindakan || "-"}`, 10.5, false, 16);
+      y += 10;
+    });
+  });
+  pdf.save(fname);
+}
+
+function rapatPrint(arr) {
+  const sect = arr.map((r) => {
+    const rows = r.items.map((it, i) => `<tr><td>${i + 1}</td><td><b>${escHtml(it.nama)}</b><br>Rek: ${escHtml(it.rek || "-")}<br>${escHtml(it.alamat || "-")}</td><td>${escHtml(it.tindakan || "-").replace(/\n/g, "<br>")}</td></tr>`).join("");
+    return `<div class="pg"><h2>RESUME RAPAT</h2><p>Kode: <b>${escHtml(r.kode)}</b><br>Hari / Tanggal: <b>${escHtml(r.hari)}, ${escHtml(formatTanggal(r.tanggal))}</b></p><table><tr><th style="width:28px">No</th><th style="width:45%">Debitur</th><th>Tindakan</th></tr>${rows}</table></div>`;
+  }).join("");
+  const html = `<html><head><title>Resume Rapat</title><style>body{font-family:Arial,sans-serif;font-size:12px;padding:24px}.pg{page-break-after:always}.pg:last-child{page-break-after:auto}table{width:100%;border-collapse:collapse}td,th{border:1px solid #444;padding:6px;vertical-align:top;text-align:left}th{background:#eee}</style></head><body>${sect}</body></html>`;
+  const f = document.createElement("iframe");
+  f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(f);
+  f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close();
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 2000); }, 300);
+}
+
 function SegBar({ cs, pct }) {
   return (
     <div style={{ width: pct + "%", minWidth: 4, display: "flex", height: 14, borderRadius: 3, overflow: "hidden" }}>
@@ -791,6 +841,60 @@ function BukuKunjungan() {
   const [pembQuery, setPembQuery] = useState("");
   const [pembExpanded, setPembExpanded] = useState(null);
   const pembFileRef = useRef(null);
+
+  const [rapatList, setRapatList] = useState([]);
+  const [rapatEdit, setRapatEdit] = useState(null);
+  const [rapatPick, setRapatPick] = useState("");
+  const [rapatMsg, setRapatMsg] = useState("");
+
+  useEffect(() => {
+    if (!window.fbDb) return;
+    const ref = window.fbDb.ref(fbPath(RAPAT_KEY));
+    const onValue = (snap) => {
+      try { setRapatList(snap.exists() && snap.val() ? JSON.parse(snap.val()) : []); } catch (e) {}
+    };
+    ref.on("value", onValue);
+    return () => ref.off("value", onValue);
+  }, []);
+
+  const persistRapat = async (list) => {
+    try { await window.fbDb.ref(fbPath(RAPAT_KEY)).set(JSON.stringify(list)); return true; }
+    catch (e) { setRapatMsg("Gagal menyimpan ke server."); return false; }
+  };
+  const newRapat = () => {
+    const t = todayStr();
+    setRapatMsg(""); setRapatPick("");
+    setRapatEdit({ id: uid(), tanggal: t, hari: hariFrom(t), kode: kodeFrom(t), items: [] });
+  };
+  const setRapatTanggal = (t) => setRapatEdit((r) => ({
+    ...r, tanggal: t, hari: hariFrom(t), kode: r.kode === kodeFrom(r.tanggal) ? kodeFrom(t) : r.kode,
+  }));
+  const addRapatDebitur = (n) => {
+    setRapatEdit((r) => r.items.some((it) => it.nid === n.id) ? r : {
+      ...r, items: [...r.items, { id: uid(), nid: n.id, nama: n.nama, rek: n.rekPembiayaan || n.rekSimpanan || "", alamat: n.alamat || "", tindakan: "" }],
+    });
+    setRapatPick("");
+  };
+  const setRapatItem = (id, patch) => setRapatEdit((r) => ({ ...r, items: r.items.map((it) => (it.id === id ? { ...it, ...patch } : it)) }));
+  const saveRapat = async () => {
+    const exists = rapatList.some((x) => x.id === rapatEdit.id);
+    const next = exists ? rapatList.map((x) => (x.id === rapatEdit.id ? rapatEdit : x)) : [rapatEdit, ...rapatList];
+    if (await persistRapat(next)) setRapatMsg("Tersimpan.");
+  };
+  const deleteRapat = async (id) => {
+    if (!window.confirm("Hapus resume rapat ini?")) return;
+    await persistRapat(rapatList.filter((x) => x.id !== id));
+    if (rapatEdit && rapatEdit.id === id) setRapatEdit(null);
+  };
+  const exportRapatPdf = () => {
+    if (!window.jspdf) { setRapatMsg("Library PDF belum termuat."); return; }
+    rapatPdf([rapatEdit], `Resume-Rapat-${rapatEdit.kode}.pdf`);
+  };
+  const sortedRapat = () => [...rapatList].sort((a, b) => String(a.tanggal).localeCompare(String(b.tanggal)));
+  const exportAllPdf = () => {
+    if (!window.jspdf) { setRapatMsg("Library PDF belum termuat."); return; }
+    rapatPdf(sortedRapat(), "Resume-Rapat-Semua.pdf");
+  };
 
   useEffect(() => {
     if (!window.fbDb) return;
@@ -1526,6 +1630,12 @@ function BukuKunjungan() {
           >
             📊 Pembiayaan (Coll &amp; AO)
           </button>
+          <button
+            style={{ ...styles.mainTabBtn, ...(mainView === "rapat" ? styles.mainTabBtnActive : {}) }}
+            onClick={() => setMainView("rapat")}
+          >
+            📝 Resume Rapat
+          </button>
         </div>
 
         {mainView === "nasabah" && (
@@ -2137,6 +2247,77 @@ function BukuKunjungan() {
                   })}
                 </>
               )}
+            </div>
+          );
+        })()}
+
+        {mainView === "rapat" && (() => {
+          const box = { ...styles.card, padding: 14, marginBottom: 12 };
+          const pq = rapatPick.trim().toLowerCase();
+          const hits = rapatEdit && pq ? nasabahList.filter((n) => n.nama.toLowerCase().includes(pq) || String(n.rekPembiayaan || "").includes(pq)).slice(0, 8) : [];
+          if (!rapatEdit) {
+            return (
+              <div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                  <button style={styles.primaryBtn} onClick={newRapat}>+ Resume Rapat Baru</button>
+                  {rapatList.length > 0 && <button style={styles.secondaryBtn} onClick={exportAllPdf}>📄 Export Semua (PDF)</button>}
+                  {rapatList.length > 0 && <button style={styles.secondaryBtn} onClick={() => rapatPrint(sortedRapat())}>🖨️ Print Semua</button>}
+                </div>
+                {rapatMsg && <div style={{ fontSize: 12.5, marginBottom: 8, color: "#8B2E2E" }}>{rapatMsg}</div>}
+                {rapatList.length === 0 && <div style={styles.noVisit}>Belum ada resume rapat.</div>}
+                {rapatList.map((r) => (
+                  <div key={r.id} style={{ ...box, display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ flex: 1, cursor: "pointer" }} onClick={() => { setRapatMsg(""); setRapatEdit(r); }}>
+                      <div style={{ fontWeight: 700 }}>{r.kode}</div>
+                      <div style={{ fontSize: 12.5, color: "#5B5745" }}>{r.hari}, {formatTanggal(r.tanggal)} · {r.items.length} debitur</div>
+                    </div>
+                    <button style={styles.linkBtn} onClick={() => deleteRapat(r.id)}>Hapus</button>
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          return (
+            <div>
+              <button style={{ ...styles.linkBtn, marginBottom: 10 }} onClick={() => setRapatEdit(null)}>← Daftar rapat</button>
+              <div style={box}>
+                <label style={styles.label}>Tanggal rapat</label>
+                <input type="date" value={rapatEdit.tanggal} onChange={(e) => setRapatTanggal(e.target.value)} style={styles.input} />
+                <label style={styles.label}>Hari</label>
+                <input type="text" value={rapatEdit.hari} readOnly style={styles.input} />
+                <label style={styles.label}>Kode rapat</label>
+                <input type="text" value={rapatEdit.kode} onChange={(e) => setRapatEdit({ ...rapatEdit, kode: e.target.value })} style={styles.input} />
+              </div>
+
+              <div style={box}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Tambah Debitur</div>
+                <input type="text" placeholder="Ketik nama atau nomor rekening..." value={rapatPick} onChange={(e) => setRapatPick(e.target.value)} style={styles.input} />
+                {hits.map((n) => (
+                  <div key={n.id} onClick={() => addRapatDebitur(n)} style={{ padding: "9px 4px", borderBottom: "1px solid #E4DEC7", cursor: "pointer", fontSize: 13 }}>
+                    <b>{n.nama}</b><br /><span style={{ color: "#5B5745" }}>{n.rekPembiayaan || n.rekSimpanan || "-"} · {n.alamat}</span>
+                  </div>
+                ))}
+                {pq && hits.length === 0 && <div style={styles.noVisit}>Tidak ditemukan.</div>}
+              </div>
+
+              {rapatEdit.items.map((it, i) => (
+                <div key={it.id} style={box}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ fontWeight: 700 }}>{i + 1}. {it.nama}</div>
+                    <button style={styles.linkBtn} onClick={() => setRapatEdit({ ...rapatEdit, items: rapatEdit.items.filter((x) => x.id !== it.id) })}>Hapus</button>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "#5B5745", margin: "4px 0" }}>No. Rek: {it.rek || "-"}<br />{it.alamat || "-"}</div>
+                  <label style={styles.label}>Tindakan</label>
+                  <textarea rows={3} value={it.tindakan} placeholder="Tulis tindakan yang akan dilakukan..." onChange={(e) => setRapatItem(it.id, { tindakan: e.target.value })} style={styles.input} />
+                </div>
+              ))}
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button style={styles.primaryBtn} onClick={saveRapat}>💾 Simpan</button>
+                <button style={styles.secondaryBtn} onClick={exportRapatPdf}>📄 Export PDF</button>
+                <button style={styles.secondaryBtn} onClick={() => rapatPrint([rapatEdit])}>🖨️ Print</button>
+              </div>
+              {rapatMsg && <div style={{ fontSize: 12.5, marginTop: 8, color: rapatMsg.startsWith("Gagal") ? "#8B2E2E" : "#5A6E4F" }}>{rapatMsg}</div>}
             </div>
           );
         })()}
