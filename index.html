@@ -933,6 +933,47 @@ function BukuKunjungan() {
       matched: rows.filter((r) => r.n).length, totalOs: rows.reduce((s, r) => s + r.os, 0) };
   }, [pembData, nasabahList]);
 
+  const syncedRef = useRef("");
+  const syncPembToNasabah = async (rows) => {
+    let added = 0, filled = 0;
+    try {
+      await window.fbDb.ref(fbPath(INDEX_KEY)).transaction((cur) => {
+        added = 0; filled = 0;
+        if (cur == null) return undefined;
+        let list;
+        try { list = JSON.parse(cur); } catch (e) { return undefined; }
+        const byRek = {}, byName = {};
+        list.forEach((n) => {
+          if (n.rekPembiayaan) byRek[String(n.rekPembiayaan).trim()] = n;
+          const k = normName(n.nama);
+          if (k && !byName[k]) byName[k] = n;
+        });
+        rows.forEach((r) => {
+          if (byRek[r.rek]) return;
+          const k = normName(r.nama);
+          const hit = k === "TANPANAMA" ? null : byName[k];
+          if (hit) {
+            if (!hit.rekPembiayaan) { hit.rekPembiayaan = r.rek; byRek[r.rek] = hit; filled++; }
+            return;
+          }
+          const nn = { id: uid(), nomor: "", nama: r.nama, rekSimpanan: "", rekPembiayaan: r.rek, alamat: "", ao: r.ao === "TANPA AO" ? "" : r.ao, noWa: "", visitCount: 0 };
+          list.push(nn); byRek[r.rek] = nn; if (k) byName[k] = nn; added++;
+        });
+        return added || filled ? JSON.stringify(list) : undefined;
+      });
+    } catch (e) { setPembMsg("Gagal menyinkronkan ke Data Nasabah."); }
+    return { added, filled };
+  };
+
+  useEffect(() => {
+    if (!pembView || !pembData || loading || !window.fbDb) return;
+    if (!pembView.rows.some((r) => !r.n) || syncedRef.current === pembData.uploadedAt) return;
+    syncedRef.current = pembData.uploadedAt;
+    syncPembToNasabah(pembData.rows).then((res) => {
+      if (res.added || res.filled) setPembMsg(`${res.added} nasabah baru dari data pembiayaan otomatis ditambahkan ke Data Nasabah${res.filled ? `, ${res.filled} nomor rekening dilengkapi` : ""}.`);
+    });
+  }, [pembView, loading]);
+
   const handlePembFile = async (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = "";
@@ -947,31 +988,10 @@ function BukuKunjungan() {
         setPembBusy(false); return;
       }
       const payload = { fileName: file.name, uploadedAt: new Date().toISOString(), months: parsed.months, rows: parsed.rows };
+      syncedRef.current = payload.uploadedAt;
       await window.fbDb.ref(fbPath(PEMB_KEY)).set(JSON.stringify(payload));
-      // Sinkron ke Data Nasabah: tambah yang belum ada, isi rekening yang kosong
-      const byRek = {}, byName = {};
-      nasabahList.forEach((n) => {
-        if (n.rekPembiayaan) byRek[String(n.rekPembiayaan).trim()] = n;
-        const k = normName(n.nama);
-        if (k && !byName[k]) byName[k] = n;
-      });
-      const added = [], filled = {};
-      parsed.rows.forEach((r) => {
-        if (byRek[r.rek]) return;
-        const k = normName(r.nama);
-        const hit = byName[k];
-        if (hit) {
-          if (!hit.rekPembiayaan && !filled[hit.id]) { filled[hit.id] = r.rek; byRek[r.rek] = hit; }
-          return;
-        }
-        const nn = { id: uid(), nomor: "", nama: r.nama, rekSimpanan: "", rekPembiayaan: r.rek, alamat: "", ao: r.ao === "TANPA AO" ? "" : r.ao, noWa: "", visitCount: 0 };
-        added.push(nn); byRek[r.rek] = nn; byName[k] = nn;
-      });
-      const nFilled = Object.keys(filled).length;
-      if (added.length || nFilled) {
-        updateIndex((prev) => [...prev.map((n) => (filled[n.id] ? { ...n, rekPembiayaan: filled[n.id] } : n)), ...added]);
-      }
-      setPembMsg(`Berhasil: ${parsed.rows.length} rekening diimpor. ${added.length} nasabah baru ditambahkan ke Data Nasabah${nFilled ? `, ${nFilled} nomor rekening pembiayaan dilengkapi` : ""}.`);
+      const res = await syncPembToNasabah(parsed.rows);
+      setPembMsg(`Berhasil: ${parsed.rows.length} rekening diimpor. ${res.added} nasabah baru ditambahkan ke Data Nasabah${res.filled ? `, ${res.filled} nomor rekening pembiayaan dilengkapi` : ""}.`);
     } catch (err) { setPembMsg("Gagal import: " + err.message); }
     setPembBusy(false);
   };
