@@ -188,6 +188,49 @@ function CollLegend() {
     </div>
   );
 }
+function LineChart({ trend }) {
+  const [hide, setHide] = useState({});
+  const W = 340, H = 200, L = 30, R = 14, T = 14, B = 26;
+  const vis = [0, 1, 2, 3, 4].filter((c) => !hide[c]);
+  const max = Math.max(1, ...trend.flatMap((t) => vis.map((c) => t.cs[c])));
+  const top = Math.ceil(max / 4) * 4;
+  const x = (i) => L + (trend.length <= 1 ? 0 : (i * (W - L - R)) / (trend.length - 1));
+  const y = (v) => T + (H - T - B) * (1 - v / top);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
+        {COLL_COLORS.map((c, i) => (
+          <button key={i} onClick={() => setHide({ ...hide, [i]: !hide[i] })}
+            style={{ border: "1px solid " + c, background: hide[i] ? "transparent" : c, color: hide[i] ? c : "#fff", borderRadius: 14, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Coll {i}
+          </button>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        {[0, 1, 2, 3, 4].map((k) => {
+          const v = (top / 4) * k;
+          return (
+            <g key={k}>
+              <line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="#E4DEC7" strokeWidth="1" />
+              <text x={L - 4} y={y(v) + 3} fontSize="9" textAnchor="end" fill="#5B5745">{Math.round(v)}</text>
+            </g>
+          );
+        })}
+        {trend.map((t, i) => (
+          <text key={t.m} x={x(i)} y={H - 8} fontSize="9" textAnchor="middle" fill="#5B5745">{t.m}</text>
+        ))}
+        {vis.map((c) => (
+          <g key={c}>
+            <polyline fill="none" stroke={COLL_COLORS[c]} strokeWidth="2" strokeLinejoin="round" points={trend.map((t, i) => `${x(i)},${y(t.cs[c])}`).join(" ")} />
+            {trend.map((t, i) => <circle key={i} cx={x(i)} cy={y(t.cs[c])} r="2.5" fill={COLL_COLORS[c]} />)}
+            <text x={x(trend.length - 1)} y={y(trend[trend.length - 1].cs[c]) - 6} fontSize="9" fontWeight="700" textAnchor="middle" fill={COLL_COLORS[c]}>{trend[trend.length - 1].cs[c]}</text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function TrendChart({ trend }) {
   const max = Math.max(1, ...trend.map((t) => t.tot));
   return (
@@ -2205,6 +2248,14 @@ function BukuKunjungan() {
                       <div style={{ fontWeight: 700 }}>Tren Coll Bulanan (jumlah rekening)</div>
                       <CollLegend />
                       <TrendChart trend={P.trend} />
+                    </div>
+                  )}
+
+                  {P.trend.length > 1 && (
+                    <div style={box}>
+                      <div style={{ fontWeight: 700 }}>Diagram Tren per Coll</div>
+                      <div style={{ fontSize: 12.5, color: "#5B5745" }}>Jumlah rekening di tiap Coll per bulan. Tap Coll untuk tampil/sembunyikan garis.</div>
+                      <LineChart trend={P.trend} />
                     </div>
                   )}
 
