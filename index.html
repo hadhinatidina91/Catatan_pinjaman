@@ -948,7 +948,30 @@ function BukuKunjungan() {
       }
       const payload = { fileName: file.name, uploadedAt: new Date().toISOString(), months: parsed.months, rows: parsed.rows };
       await window.fbDb.ref(fbPath(PEMB_KEY)).set(JSON.stringify(payload));
-      setPembMsg(`Berhasil: ${parsed.rows.length} rekening diimpor.`);
+      // Sinkron ke Data Nasabah: tambah yang belum ada, isi rekening yang kosong
+      const byRek = {}, byName = {};
+      nasabahList.forEach((n) => {
+        if (n.rekPembiayaan) byRek[String(n.rekPembiayaan).trim()] = n;
+        const k = normName(n.nama);
+        if (k && !byName[k]) byName[k] = n;
+      });
+      const added = [], filled = {};
+      parsed.rows.forEach((r) => {
+        if (byRek[r.rek]) return;
+        const k = normName(r.nama);
+        const hit = byName[k];
+        if (hit) {
+          if (!hit.rekPembiayaan && !filled[hit.id]) { filled[hit.id] = r.rek; byRek[r.rek] = hit; }
+          return;
+        }
+        const nn = { id: uid(), nomor: "", nama: r.nama, rekSimpanan: "", rekPembiayaan: r.rek, alamat: "", ao: r.ao === "TANPA AO" ? "" : r.ao, noWa: "", visitCount: 0 };
+        added.push(nn); byRek[r.rek] = nn; byName[k] = nn;
+      });
+      const nFilled = Object.keys(filled).length;
+      if (added.length || nFilled) {
+        updateIndex((prev) => [...prev.map((n) => (filled[n.id] ? { ...n, rekPembiayaan: filled[n.id] } : n)), ...added]);
+      }
+      setPembMsg(`Berhasil: ${parsed.rows.length} rekening diimpor. ${added.length} nasabah baru ditambahkan ke Data Nasabah${nFilled ? `, ${nFilled} nomor rekening pembiayaan dilengkapi` : ""}.`);
     } catch (err) { setPembMsg("Gagal import: " + err.message); }
     setPembBusy(false);
   };
