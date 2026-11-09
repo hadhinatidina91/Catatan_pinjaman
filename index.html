@@ -1217,7 +1217,7 @@ function BukuKunjungan() {
     const custom = laporanList.map((l) => ({
       key: "l:" + l.id, grup: "custom", custom: true, id: l.id, judul: l.nama,
       sub: formatTanggal(l.tanggal), items: l.items,
-      members: l.items.map((it) => aktif.find((n) => n.id === it.nid) || { id: "rek:" + it.rek, nama: it.nama, rekPembiayaan: it.rek, pseudo: true }),
+      members: l.items.map((it) => aktif.find((n) => n.id === it.nid) || (it.rek && aktif.find((n) => laporanRek(n) === it.rek)) || { id: "rek:" + it.rek, nama: it.nama, rekPembiayaan: it.rek, pseudo: true }),
     }));
     return { rencana, perAo, semua, custom };
   }, [nasabahList, rencanaList, laporanList]);
@@ -2707,7 +2707,7 @@ function BukuKunjungan() {
           const rows = laporanRows();
           const isCustom = !!laporanActive.custom;
           const cands = !isCustom ? [] : pembView
-            ? pembView.rows.map((r) => ({ nid: r.n ? r.n.id : null, rek: r.rek, nama: r.nama, coll: r.coll, ao: r.ao }))
+            ? pembView.rows.map((r) => ({ nid: r.n ? r.n.id : ((nasabahList.find((n) => !n.deletedAt && laporanRek(n) === r.rek) || {}).id || null), rek: r.rek, nama: r.nama, coll: r.coll, ao: r.ao }))
             : nasabahList.filter((n) => !n.deletedAt).map((n) => ({ nid: n.id, rek: laporanRek(n) === "-" ? "" : laporanRek(n), nama: n.nama, coll: null, ao: (n.ao || "").trim() }));
           const inLap = new Set(isCustom ? laporanActive.items.map(itemKey) : []);
           const cq = lpQuery.trim().toLowerCase();
