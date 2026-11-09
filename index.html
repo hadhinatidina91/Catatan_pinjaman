@@ -179,6 +179,8 @@ const tglPendek = (iso) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso);
 };
 const LAPORAN_KEY = "daftar-laporan-v1";
+const LAPORAN_BACKUP = "daftar-laporan-backup-v1";
+const fbErr = (nama, err) => `Gagal membaca ${nama} dari Firebase (${(err && (err.code || err.message)) || "error"}). Data tidak terhapus, tetapi tidak bisa diakses. Cek aturan (rules) Realtime Database.`;
 const itemKey = (it) => it.nid || "rek:" + it.rek;
 const laporanRek = (n) => n.rekPembiayaan || n.rekSimpanan || "-";
 function laporanKeterangan(detail, mode) {
@@ -995,7 +997,7 @@ function BukuKunjungan() {
     const onValue = (snap) => {
       try { setRapatList(snap.exists() && snap.val() ? JSON.parse(snap.val()) : []); } catch (e) {}
     };
-    ref.on("value", onValue);
+    ref.on("value", onValue, (err) => setSaveError(fbErr("Resume Rapat", err)));
     return () => ref.off("value", onValue);
   }, []);
 
@@ -1045,7 +1047,7 @@ function BukuKunjungan() {
       try { setPembData(snap.exists() && snap.val() ? JSON.parse(snap.val()) : null); }
       catch (e) { setPembMsg("Data pembiayaan di server rusak."); }
     };
-    ref.on("value", onValue);
+    ref.on("value", onValue, (err) => setSaveError(fbErr("data Pembiayaan", err)));
     return () => ref.off("value", onValue);
   }, []);
 
@@ -1139,20 +1141,38 @@ function BukuKunjungan() {
     if (!open && r.n) loadDetail(r.n.id);
   };
 
+  const lapSave = useRef({ pending: 0, failed: false });
   useEffect(() => {
+    try { const b = localStorage.getItem(LAPORAN_BACKUP); if (b) setLaporanList(JSON.parse(b)); } catch (e) {}
     if (!window.fbDb) return;
     const ref = window.fbDb.ref(fbPath(LAPORAN_KEY));
     const onValue = (snap) => {
-      try { setLaporanList(snap.exists() && snap.val() ? JSON.parse(snap.val()) : []); } catch (e) {}
+      if (lapSave.current.pending > 0 || lapSave.current.failed) return;
+      try {
+        const v = snap.exists() && snap.val() ? JSON.parse(snap.val()) : [];
+        setLaporanList(v);
+        try { localStorage.setItem(LAPORAN_BACKUP, JSON.stringify(v)); } catch (e) {}
+      } catch (e) {}
     };
-    ref.on("value", onValue);
+    ref.on("value", onValue, (err) => setSaveError(fbErr("Daftar Laporan", err)));
     return () => ref.off("value", onValue);
   }, []);
 
   const updateLaporanList = (updater) => {
     setLaporanList((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      if (window.fbDb) window.fbDb.ref(fbPath(LAPORAN_KEY)).set(JSON.stringify(next)).catch(() => setLaporanMsg("Gagal menyimpan ke server."));
+      try { localStorage.setItem(LAPORAN_BACKUP, JSON.stringify(next)); } catch (e) {}
+      if (window.fbDb) {
+        lapSave.current.pending++;
+        window.fbDb.ref(fbPath(LAPORAN_KEY)).set(JSON.stringify(next))
+          .then(() => { lapSave.current.failed = false; })
+          .catch((err) => {
+            lapSave.current.failed = true;
+            const m = "Daftar laporan GAGAL disimpan ke server (" + ((err && (err.code || err.message)) || "error") + "). Sementara hanya tersimpan di perangkat ini. Cek aturan (rules) Realtime Database.";
+            setSaveError(m); setLaporanMsg(m);
+          })
+          .finally(() => { lapSave.current.pending--; });
+      }
       return next;
     });
   };
@@ -1308,7 +1328,7 @@ function BukuKunjungan() {
         setRencanaList([]);
       }
     };
-    ref.on("value", onValue);
+    ref.on("value", onValue, (err) => setSaveError(fbErr("Rencana Kunjungan", err)));
     return () => ref.off("value", onValue);
   }, []);
 
