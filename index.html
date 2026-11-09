@@ -172,6 +172,92 @@ function rapatPrint(arr) {
   setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 2000); }, 300);
 }
 
+/* ===== Daftar Laporan: helper ===== */
+const tglPendek = (iso) => {
+  if (!iso) return "-";
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso);
+};
+const laporanRek = (n) => n.rekPembiayaan || n.rekSimpanan || "-";
+function laporanKeterangan(detail, mode) {
+  if (!detail) return "";
+  const vs = (detail.kunjungan || [])
+    .filter((v) => !v.deletedAt)
+    .slice()
+    .sort((a, b) => String(a.tanggal || "").localeCompare(String(b.tanggal || "")));
+  if (!vs.length) return "-";
+  const pick = mode === "terakhir" ? [vs[vs.length - 1]] : vs;
+  return pick.map((v) => `${tglPendek(v.tanggal)}: ${String(v.hasil || "").trim() || "-"}`).join("\n");
+}
+const laporanFileName = (judul, ext) =>
+  `Laporan-${String(judul || "kunjungan").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${todayStr()}.${ext}`;
+
+function laporanExcel(judul, sub, rows) {
+  const aoa = [[judul], [sub], [], ["No", "No. Rekening", "Nama", "Keterangan"]];
+  rows.forEach((r, i) => aoa.push([i + 1, String(r.rek), r.nama, r.ket]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 5 }, { wch: 22 }, { wch: 32 }, { wch: 90 }];
+  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Laporan");
+  XLSX.writeFile(wb, laporanFileName(judul, "xlsx"));
+}
+
+function laporanPdf(judul, sub, rows) {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF("p", "pt", "a4");
+  const M = 36, TOP = 50, BOTTOM = 800, LH = 12, PAD = 4;
+  const cols = [{ t: "No", w: 28 }, { t: "No. Rekening", w: 100 }, { t: "Nama", w: 120 }, { t: "Keterangan", w: 311 }];
+  const xs = []; let acc = M; cols.forEach((c) => { xs.push(acc); acc += c.w; });
+  const totalW = acc - M;
+  let y = TOP;
+  const header = () => {
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(14); pdf.text(String(judul), M, y); y += 16;
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9.5); pdf.text(String(sub), M, y); y += 12;
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(9.5);
+    pdf.setFillColor(235, 235, 235); pdf.rect(M, y, totalW, 18, "FD");
+    cols.forEach((c, i) => pdf.text(c.t, xs[i] + PAD, y + 12));
+    y += 18;
+  };
+  const box = (top, bottom) => cols.forEach((c, i) => pdf.rect(xs[i], top, c.w, bottom - top));
+  header();
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(9);
+  rows.forEach((r, ri) => {
+    const cells = [
+      [String(ri + 1)],
+      pdf.splitTextToSize(String(r.rek), cols[1].w - PAD * 2),
+      pdf.splitTextToSize(String(r.nama), cols[2].w - PAD * 2),
+      pdf.splitTextToSize(String(r.ket || "-"), cols[3].w - PAD * 2),
+    ];
+    const maxLines = Math.max(...cells.map((c) => c.length));
+    let segTop = y, i = 0;
+    while (i < maxLines) {
+      if (y + LH + PAD * 2 > BOTTOM) {
+        box(segTop, y + PAD);
+        pdf.addPage(); y = TOP; header(); pdf.setFont("helvetica", "normal"); pdf.setFontSize(9);
+        segTop = y;
+      }
+      cells.forEach((c, ci) => { if (c[i] !== undefined) pdf.text(c[i], xs[ci] + PAD, y + PAD + 8); });
+      y += LH; i++;
+    }
+    y += PAD * 2 - 2;
+    box(segTop, y);
+  });
+  pdf.save(laporanFileName(judul, "pdf"));
+}
+
+function laporanPrint(judul, sub, rows) {
+  const body = rows.map((r, i) =>
+    `<tr><td>${i + 1}</td><td>${escHtml(r.rek)}</td><td>${escHtml(r.nama)}</td><td>${escHtml(r.ket || "-").replace(/\n/g, "<br>")}</td></tr>`
+  ).join("");
+  const html = `<html><head><title>${escHtml(judul)}</title><style>body{font-family:Arial,sans-serif;font-size:11px;padding:20px}h2{margin:0 0 4px}p{margin:0 0 12px;color:#444}table{width:100%;border-collapse:collapse}thead{display:table-header-group}tr{page-break-inside:avoid}td,th{border:1px solid #444;padding:5px;vertical-align:top;text-align:left}th{background:#eee}</style></head><body><h2>${escHtml(judul)}</h2><p>${escHtml(sub)}</p><table><thead><tr><th style="width:28px">No</th><th style="width:105px">No. Rekening</th><th style="width:150px">Nama</th><th>Keterangan</th></tr></thead><tbody>${body}</tbody></table></body></html>`;
+  const f = document.createElement("iframe");
+  f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(f);
+  f.contentDocument.open(); f.contentDocument.write(html); f.contentDocument.close();
+  setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 2000); }, 300);
+}
+
 function SegBar({ cs, pct }) {
   return (
     <div style={{ width: pct + "%", minWidth: 4, display: "flex", height: 14, borderRadius: 3, overflow: "hidden" }}>
@@ -885,6 +971,12 @@ function BukuKunjungan() {
   const [pembExpanded, setPembExpanded] = useState(null);
   const pembFileRef = useRef(null);
 
+  const [laporanSel, setLaporanSel] = useState(null);
+  const [laporanMode, setLaporanMode] = useState("semua");
+  const [laporanQuery, setLaporanQuery] = useState("");
+  const [laporanBusy, setLaporanBusy] = useState(false);
+  const [laporanMsg, setLaporanMsg] = useState("");
+
   const [rapatList, setRapatList] = useState([]);
   const [rapatEdit, setRapatEdit] = useState(null);
   const [rapatPick, setRapatPick] = useState("");
@@ -1038,6 +1130,80 @@ function BukuKunjungan() {
     const open = pembExpanded === r.rek;
     setPembExpanded(open ? null : r.rek);
     if (!open && r.n) loadDetail(r.n.id);
+  };
+
+  const laporanSources = React.useMemo(() => {
+    const aktif = nasabahList.filter((n) => !n.deletedAt);
+    const rencana = rencanaList
+      .slice()
+      .sort((a, b) => (b.tanggal || "").localeCompare(a.tanggal || "") || (b.createdAt || "").localeCompare(a.createdAt || ""))
+      .map((r) => ({
+        key: "r:" + r.id, grup: "rencana", judul: r.nama,
+        sub: `${formatTanggal(r.tanggal)}${r.ao ? " - AO: " + r.ao : ""}`,
+        members: (r.nasabahIds || []).map((id) => aktif.find((n) => n.id === id)).filter(Boolean),
+      }));
+    const aoNames = Array.from(new Set(aktif.map((n) => (n.ao || "").trim()).filter(Boolean))).sort();
+    const perAo = aoNames.map((a) => ({
+      key: "a:" + a, grup: "ao", judul: "AO: " + a, sub: "Semua nasabah AO ini",
+      members: aktif.filter((n) => (n.ao || "").trim() === a),
+    }));
+    const semua = { key: "all", grup: "semua", judul: "Semua Nasabah", sub: "Seluruh nasabah aktif", members: aktif };
+    return { rencana, perAo, semua };
+  }, [nasabahList, rencanaList]);
+
+  const laporanActive = laporanSel
+    ? [laporanSources.semua, ...laporanSources.rencana, ...laporanSources.perAo].find((x) => x.key === laporanSel) || null
+    : null;
+
+  useEffect(() => {
+    if (mainView !== "laporan" || !laporanActive) return;
+    const need = laporanActive.members.map((n) => n.id).filter((id) => !detailCache[id]);
+    if (!need.length) return;
+    let cancelled = false;
+    setLaporanBusy(true);
+    Promise.all(need.map(async (id) => {
+      let detail = { kunjungan: [] };
+      try {
+        const res = await storage.get(detailKey(id), false);
+        if (res && res.value) detail = JSON.parse(res.value);
+      } catch (e) {}
+      return [id, detail];
+    })).then((pairs) => {
+      if (cancelled) return;
+      setDetailCache((prev) => {
+        const next = { ...prev };
+        pairs.forEach(([id, d]) => { if (!next[id]) next[id] = d; });
+        return next;
+      });
+      setLaporanBusy(false);
+    });
+    return () => { cancelled = true; setLaporanBusy(false); };
+  }, [mainView, laporanSel, laporanActive && laporanActive.members.length]);
+
+  const laporanRows = () => {
+    if (!laporanActive) return [];
+    const q = laporanQuery.trim().toLowerCase();
+    return laporanActive.members
+      .map((n) => ({ rek: laporanRek(n), nama: n.nama, ket: laporanKeterangan(detailCache[n.id], laporanMode) }))
+      .filter((r) => !q || r.nama.toLowerCase().includes(q) || String(r.rek).includes(q));
+  };
+  const laporanSubText = () =>
+    `${laporanActive.sub} | ${laporanMode === "terakhir" ? "Kunjungan terakhir" : "Semua catatan kunjungan"} | Dicetak ${formatTanggal(todayStr())}`;
+  const doLaporanExport = (jenis) => {
+    const rows = laporanRows();
+    if (!rows.length) { setLaporanMsg("Tidak ada data untuk diekspor."); return; }
+    setLaporanMsg("");
+    try {
+      if (jenis === "pdf") {
+        if (!window.jspdf) { setLaporanMsg("Library PDF belum termuat."); return; }
+        laporanPdf(laporanActive.judul, laporanSubText(), rows);
+      } else if (jenis === "xlsx") {
+        if (!window.XLSX) { setLaporanMsg("Library Excel belum termuat."); return; }
+        laporanExcel(laporanActive.judul, laporanSubText(), rows);
+      } else {
+        laporanPrint(laporanActive.judul, laporanSubText(), rows);
+      }
+    } catch (e) { setLaporanMsg("Gagal mengekspor: " + e.message); }
   };
 
   const fileInputRef = useRef(null);
@@ -1716,6 +1882,12 @@ function BukuKunjungan() {
             onClick={() => setMainView("rapat")}
           >
             📝 Resume Rapat
+          </button>
+          <button
+            style={{ ...styles.mainTabBtn, ...(mainView === "laporan" ? styles.mainTabBtnActive : {}) }}
+            onClick={() => setMainView("laporan")}
+          >
+            📑 Daftar Laporan
           </button>
         </div>
 
@@ -2407,6 +2579,103 @@ function BukuKunjungan() {
                 <button style={styles.secondaryBtn} onClick={() => rapatPrint([rapatEdit])}>🖨️ Print</button>
               </div>
               {rapatMsg && <div style={{ fontSize: 12.5, marginTop: 8, color: rapatMsg.startsWith("Gagal") ? "#8B2E2E" : "#5A6E4F" }}>{rapatMsg}</div>}
+            </div>
+          );
+        })()}
+
+        {mainView === "laporan" && (() => {
+          const SrcCard = ({ src }) => (
+            <div style={styles.card}>
+              <div style={styles.cardHead} onClick={() => { setLaporanSel(src.key); setLaporanQuery(""); setLaporanMsg(""); }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={styles.namaText}>{src.judul}</div>
+                  <div style={styles.alamatText}>{src.sub}</div>
+                </div>
+                <div style={styles.cardHeadRight}>
+                  <div style={styles.visitBadge}>{src.members.length} nasabah</div>
+                  <div style={styles.chevron}>›</div>
+                </div>
+              </div>
+            </div>
+          );
+          const grupTitle = { fontFamily: "'Spectral', serif", fontSize: 15, fontWeight: 600, color: "#3A3728", margin: "18px 0 8px" };
+
+          if (!laporanActive) {
+            return (
+              <div>
+                <p style={{ ...styles.adminHint, margin: "0 0 6px" }}>
+                  Pilih daftar nama nasabah untuk melihat laporannya: nomor rekening, nama, dan keterangan dari catatan kunjungan.
+                </p>
+                <div style={grupTitle}>Semua</div>
+                <div style={styles.cardList}><SrcCard src={laporanSources.semua} /></div>
+                <div style={grupTitle}>Dari Rencana Kunjungan</div>
+                {laporanSources.rencana.length === 0
+                  ? <div style={styles.noVisit}>Belum ada rencana kunjungan.</div>
+                  : <div style={styles.cardList}>{laporanSources.rencana.map((x) => <SrcCard key={x.key} src={x} />)}</div>}
+                <div style={grupTitle}>Per AO</div>
+                {laporanSources.perAo.length === 0
+                  ? <div style={styles.noVisit}>Belum ada data AO.</div>
+                  : <div style={styles.cardList}>{laporanSources.perAo.map((x) => <SrcCard key={x.key} src={x} />)}</div>}
+              </div>
+            );
+          }
+
+          const rows = laporanRows();
+          const th = { border: "1px solid #CFC7AE", background: "#F0E6CC", padding: "8px 10px", textAlign: "left", fontSize: 12.5, whiteSpace: "nowrap" };
+          const td = { border: "1px solid #DCD5BC", padding: "8px 10px", fontSize: 13, verticalAlign: "top", color: "#26241C" };
+          return (
+            <div>
+              <button style={{ ...styles.linkBtn, marginBottom: 10 }} onClick={() => { setLaporanSel(null); setLaporanMsg(""); }}>← Daftar laporan</button>
+              <div style={{ marginBottom: 12 }}>
+                <div style={styles.namaText}>{laporanActive.judul}</div>
+                <div style={{ fontSize: 12.5, color: "#7A7660", marginTop: 2 }}>{laporanActive.sub} · {laporanActive.members.length} nasabah</div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+                <input
+                  type="text" placeholder="Cari nama / no. rekening..."
+                  value={laporanQuery} onChange={(e) => setLaporanQuery(e.target.value)}
+                  style={{ ...styles.input, flex: 1, minWidth: 180, width: "auto" }}
+                />
+                <select value={laporanMode} onChange={(e) => setLaporanMode(e.target.value)} style={{ ...styles.input, width: "auto" }}>
+                  <option value="semua">Keterangan: semua kunjungan</option>
+                  <option value="terakhir">Keterangan: kunjungan terakhir</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                <button style={styles.secondaryBtn} disabled={laporanBusy} onClick={() => doLaporanExport("pdf")}>📄 Export PDF</button>
+                <button style={styles.secondaryBtn} disabled={laporanBusy} onClick={() => doLaporanExport("xlsx")}>📊 Export Excel</button>
+                <button style={styles.secondaryBtn} disabled={laporanBusy} onClick={() => doLaporanExport("print")}>🖨️ Print</button>
+              </div>
+              {laporanMsg && <div style={{ fontSize: 12.5, marginBottom: 8, color: "#8B2E2E" }}>{laporanMsg}</div>}
+              {laporanBusy && <div style={{ fontSize: 12.5, marginBottom: 8, color: "#7A7660" }}>Memuat catatan kunjungan…</div>}
+
+              {rows.length === 0 ? (
+                <div style={styles.noVisit}>{laporanActive.members.length === 0 ? "Daftar ini belum memiliki nasabah." : "Tidak ditemukan."}</div>
+              ) : (
+                <div style={{ overflowX: "auto", background: "#FBF9F2", border: "1px solid #DCD5BC", borderRadius: 8 }}>
+                  <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...th, width: 36 }}>No</th>
+                        <th style={{ ...th, width: 150 }}>No. Rekening</th>
+                        <th style={{ ...th, width: 200 }}>Nama</th>
+                        <th style={th}>Keterangan</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, i) => (
+                        <tr key={i}>
+                          <td style={td}>{i + 1}</td>
+                          <td style={{ ...td, fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5 }}>{r.rek}</td>
+                          <td style={{ ...td, fontWeight: 600 }}>{r.nama}</td>
+                          <td style={{ ...td, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{r.ket || (laporanBusy ? "…" : "-")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           );
         })()}
