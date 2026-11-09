@@ -178,6 +178,8 @@ const tglPendek = (iso) => {
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso);
 };
+const LAPORAN_KEY = "daftar-laporan-v1";
+const itemKey = (it) => it.nid || "rek:" + it.rek;
 const laporanRek = (n) => n.rekPembiayaan || n.rekSimpanan || "-";
 function laporanKeterangan(detail, mode) {
   if (!detail) return "";
@@ -972,10 +974,15 @@ function BukuKunjungan() {
   const pembFileRef = useRef(null);
 
   const [laporanSel, setLaporanSel] = useState(null);
-  const [laporanMode, setLaporanMode] = useState("semua");
+  const [laporanMode, setLaporanMode] = useState("terakhir");
   const [laporanQuery, setLaporanQuery] = useState("");
   const [laporanBusy, setLaporanBusy] = useState(false);
   const [laporanMsg, setLaporanMsg] = useState("");
+  const [laporanList, setLaporanList] = useState([]);
+  const [laporanNewName, setLaporanNewName] = useState("");
+  const [lpColl, setLpColl] = useState("semua");
+  const [lpAo, setLpAo] = useState("");
+  const [lpQuery, setLpQuery] = useState("");
 
   const [rapatList, setRapatList] = useState([]);
   const [rapatEdit, setRapatEdit] = useState(null);
@@ -1132,6 +1139,45 @@ function BukuKunjungan() {
     if (!open && r.n) loadDetail(r.n.id);
   };
 
+  useEffect(() => {
+    if (!window.fbDb) return;
+    const ref = window.fbDb.ref(fbPath(LAPORAN_KEY));
+    const onValue = (snap) => {
+      try { setLaporanList(snap.exists() && snap.val() ? JSON.parse(snap.val()) : []); } catch (e) {}
+    };
+    ref.on("value", onValue);
+    return () => ref.off("value", onValue);
+  }, []);
+
+  const updateLaporanList = (updater) => {
+    setLaporanList((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      if (window.fbDb) window.fbDb.ref(fbPath(LAPORAN_KEY)).set(JSON.stringify(next)).catch(() => setLaporanMsg("Gagal menyimpan ke server."));
+      return next;
+    });
+  };
+  const createLaporan = () => {
+    const nama = laporanNewName.trim();
+    if (!nama) return;
+    const id = uid();
+    updateLaporanList((prev) => [{ id, nama, tanggal: todayStr(), items: [] }, ...prev]);
+    setLaporanNewName(""); setLaporanSel("l:" + id); setLaporanQuery(""); setLaporanMsg("");
+    setLpColl("semua"); setLpAo(""); setLpQuery("");
+  };
+  const addLaporanItems = (id, cs) => updateLaporanList((prev) => prev.map((l) => {
+    if (l.id !== id) return l;
+    const have = new Set(l.items.map(itemKey));
+    const add = [];
+    cs.forEach((c) => { const k = c.nid || "rek:" + c.rek; if (!have.has(k)) { have.add(k); add.push({ nid: c.nid || null, rek: c.rek || "", nama: c.nama }); } });
+    return { ...l, items: [...l.items, ...add] };
+  }));
+  const removeLaporanItem = (id, key) => updateLaporanList((prev) => prev.map((l) => (l.id === id ? { ...l, items: l.items.filter((it) => itemKey(it) !== key) } : l)));
+  const deleteLaporan = (id) => {
+    if (!window.confirm("Hapus daftar laporan ini?")) return;
+    updateLaporanList((prev) => prev.filter((l) => l.id !== id));
+    setLaporanSel(null);
+  };
+
   const laporanSources = React.useMemo(() => {
     const aktif = nasabahList.filter((n) => !n.deletedAt);
     const rencana = rencanaList
@@ -1148,11 +1194,16 @@ function BukuKunjungan() {
       members: aktif.filter((n) => (n.ao || "").trim() === a),
     }));
     const semua = { key: "all", grup: "semua", judul: "Semua Nasabah", sub: "Seluruh nasabah aktif", members: aktif };
-    return { rencana, perAo, semua };
-  }, [nasabahList, rencanaList]);
+    const custom = laporanList.map((l) => ({
+      key: "l:" + l.id, grup: "custom", custom: true, id: l.id, judul: l.nama,
+      sub: formatTanggal(l.tanggal), items: l.items,
+      members: l.items.map((it) => aktif.find((n) => n.id === it.nid) || { id: "rek:" + it.rek, nama: it.nama, rekPembiayaan: it.rek, pseudo: true }),
+    }));
+    return { rencana, perAo, semua, custom };
+  }, [nasabahList, rencanaList, laporanList]);
 
   const laporanActive = laporanSel
-    ? [laporanSources.semua, ...laporanSources.rencana, ...laporanSources.perAo].find((x) => x.key === laporanSel) || null
+    ? [laporanSources.semua, ...laporanSources.custom, ...laporanSources.rencana, ...laporanSources.perAo].find((x) => x.key === laporanSel) || null
     : null;
 
   useEffect(() => {
@@ -1184,7 +1235,7 @@ function BukuKunjungan() {
     if (!laporanActive) return [];
     const q = laporanQuery.trim().toLowerCase();
     return laporanActive.members
-      .map((n) => ({ rek: laporanRek(n), nama: n.nama, ket: laporanKeterangan(detailCache[n.id], laporanMode) }))
+      .map((n) => ({ mid: n.id, rek: laporanRek(n), nama: n.nama, ket: laporanKeterangan(detailCache[n.id], laporanMode) }))
       .filter((r) => !q || r.nama.toLowerCase().includes(q) || String(r.rek).includes(q));
   };
   const laporanSubText = () =>
@@ -2606,6 +2657,19 @@ function BukuKunjungan() {
                 <p style={{ ...styles.adminHint, margin: "0 0 6px" }}>
                   Pilih daftar nama nasabah untuk melihat laporannya: nomor rekening, nama, dan keterangan dari catatan kunjungan.
                 </p>
+                <div style={grupTitle}>Laporan Saya</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                  <input
+                    type="text" placeholder="Nama laporan, mis. Coll 4 - Limpung"
+                    value={laporanNewName} onChange={(e) => setLaporanNewName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") createLaporan(); }}
+                    style={{ ...styles.input, flex: 1, minWidth: 200, width: "auto" }}
+                  />
+                  <button style={styles.primaryBtn} onClick={createLaporan}>+ Buat Daftar Laporan</button>
+                </div>
+                {laporanSources.custom.length === 0
+                  ? <div style={styles.noVisit}>Belum ada daftar laporan. Buat satu, lalu masukkan nasabah dari filter Coll / AO.</div>
+                  : <div style={styles.cardList}>{laporanSources.custom.map((x) => <SrcCard key={x.key} src={x} />)}</div>}
                 <div style={grupTitle}>Semua</div>
                 <div style={styles.cardList}><SrcCard src={laporanSources.semua} /></div>
                 <div style={grupTitle}>Dari Rencana Kunjungan</div>
@@ -2621,6 +2685,17 @@ function BukuKunjungan() {
           }
 
           const rows = laporanRows();
+          const isCustom = !!laporanActive.custom;
+          const cands = !isCustom ? [] : pembView
+            ? pembView.rows.map((r) => ({ nid: r.n ? r.n.id : null, rek: r.rek, nama: r.nama, coll: r.coll, ao: r.ao }))
+            : nasabahList.filter((n) => !n.deletedAt).map((n) => ({ nid: n.id, rek: laporanRek(n) === "-" ? "" : laporanRek(n), nama: n.nama, coll: null, ao: (n.ao || "").trim() }));
+          const inLap = new Set(isCustom ? laporanActive.items.map(itemKey) : []);
+          const cq = lpQuery.trim().toLowerCase();
+          const filt = cands.filter((c) =>
+            (lpColl === "semua" || c.coll === Number(lpColl)) && (!lpAo || c.ao === lpAo) &&
+            (!cq || c.nama.toLowerCase().includes(cq) || String(c.rek).includes(cq)));
+          const filtBaru = filt.filter((c) => !inLap.has(c.nid || "rek:" + c.rek));
+          const aoList = Array.from(new Set(cands.map((c) => c.ao).filter(Boolean))).sort();
           const th = { border: "1px solid #CFC7AE", background: "#F0E6CC", padding: "8px 10px", textAlign: "left", fontSize: 12.5, whiteSpace: "nowrap" };
           const td = { border: "1px solid #DCD5BC", padding: "8px 10px", fontSize: 13, verticalAlign: "top", color: "#26241C" };
           return (
@@ -2631,9 +2706,48 @@ function BukuKunjungan() {
                 <div style={{ fontSize: 12.5, color: "#7A7660", marginTop: 2 }}>{laporanActive.sub} · {laporanActive.members.length} nasabah</div>
               </div>
 
+              {isCustom && (
+                <div style={{ ...styles.card, padding: 14, marginBottom: 14 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Tambah nasabah ke laporan</div>
+                  {!pembView && <div style={{ fontSize: 12, color: "#9C7A3C", marginBottom: 6 }}>Data pembiayaan belum diunggah, jadi filter Coll belum tersedia. Unggah di tab Pembiayaan.</div>}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                    {pembView && (
+                      <select value={lpColl} onChange={(e) => setLpColl(e.target.value)} style={{ ...styles.input, width: "auto" }}>
+                        <option value="semua">Semua Coll</option>
+                        {[0, 1, 2, 3, 4].map((c) => <option key={c} value={c}>Coll {c}</option>)}
+                      </select>
+                    )}
+                    <select value={lpAo} onChange={(e) => setLpAo(e.target.value)} style={{ ...styles.input, width: "auto" }}>
+                      <option value="">Semua AO</option>
+                      {aoList.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                    <input type="text" placeholder="Cari nama / rekening..." value={lpQuery} onChange={(e) => setLpQuery(e.target.value)} style={{ ...styles.input, flex: 1, minWidth: 160, width: "auto" }} />
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+                    <button style={styles.primaryBtn} disabled={filtBaru.length === 0} onClick={() => addLaporanItems(laporanActive.id, filtBaru)}>
+                      + Tambahkan semua hasil filter ({filtBaru.length})
+                    </button>
+                    <span style={{ fontSize: 12, color: "#7A7660" }}>{filt.length} cocok dengan filter</span>
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: "auto", borderTop: "1px solid #E4DEC7" }}>
+                    {filt.slice(0, 80).map((c) => {
+                      const sudah = inLap.has(c.nid || "rek:" + c.rek);
+                      return (
+                        <div key={(c.nid || "") + c.rek + c.nama} onClick={() => !sudah && addLaporanItems(laporanActive.id, [c])}
+                          style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "9px 4px", borderBottom: "1px solid #E4DEC7", cursor: sudah ? "default" : "pointer", opacity: sudah ? 0.5 : 1, fontSize: 13 }}>
+                          <span><b>{c.nama}</b><br /><span style={{ color: "#5B5745" }}>{c.rek || "-"}{c.coll != null ? ` · Coll ${c.coll}` : ""}{c.ao ? ` · ${c.ao}` : ""}</span></span>
+                          <span style={{ color: sudah ? "#5A6E4F" : "#8A6A2F", fontWeight: 600, whiteSpace: "nowrap" }}>{sudah ? "✓ masuk" : "+ tambah"}</span>
+                        </div>
+                      );
+                    })}
+                    {filt.length > 80 && <div style={{ fontSize: 12, color: "#7A7660", padding: 8 }}>Menampilkan 80 pertama. Persempit filter, atau pakai tombol tambah semua.</div>}
+                    {filt.length === 0 && <div style={styles.noVisit}>Tidak ada yang cocok.</div>}
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
                 <input
-                  type="text" placeholder="Cari nama / no. rekening..."
+                  type="text" placeholder="Cari di laporan ini..."
                   value={laporanQuery} onChange={(e) => setLaporanQuery(e.target.value)}
                   style={{ ...styles.input, flex: 1, minWidth: 180, width: "auto" }}
                 />
@@ -2646,12 +2760,13 @@ function BukuKunjungan() {
                 <button style={styles.secondaryBtn} disabled={laporanBusy} onClick={() => doLaporanExport("pdf")}>📄 Export PDF</button>
                 <button style={styles.secondaryBtn} disabled={laporanBusy} onClick={() => doLaporanExport("xlsx")}>📊 Export Excel</button>
                 <button style={styles.secondaryBtn} disabled={laporanBusy} onClick={() => doLaporanExport("print")}>🖨️ Print</button>
+                {isCustom && <button style={styles.linkBtn} onClick={() => deleteLaporan(laporanActive.id)}>🗑️ Hapus daftar ini</button>}
               </div>
               {laporanMsg && <div style={{ fontSize: 12.5, marginBottom: 8, color: "#8B2E2E" }}>{laporanMsg}</div>}
               {laporanBusy && <div style={{ fontSize: 12.5, marginBottom: 8, color: "#7A7660" }}>Memuat catatan kunjungan…</div>}
 
               {rows.length === 0 ? (
-                <div style={styles.noVisit}>{laporanActive.members.length === 0 ? "Daftar ini belum memiliki nasabah." : "Tidak ditemukan."}</div>
+                <div style={styles.noVisit}>{laporanActive.members.length === 0 ? (isCustom ? "Belum ada nasabah. Pilih filter di atas lalu klik nama untuk menambahkan." : "Daftar ini belum memiliki nasabah.") : "Tidak ditemukan."}</div>
               ) : (
                 <div style={{ overflowX: "auto", background: "#FBF9F2", border: "1px solid #DCD5BC", borderRadius: 8 }}>
                   <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
@@ -2661,6 +2776,7 @@ function BukuKunjungan() {
                         <th style={{ ...th, width: 150 }}>No. Rekening</th>
                         <th style={{ ...th, width: 200 }}>Nama</th>
                         <th style={th}>Keterangan</th>
+                        {isCustom && <th style={{ ...th, width: 56 }}></th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -2670,6 +2786,7 @@ function BukuKunjungan() {
                           <td style={{ ...td, fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5 }}>{r.rek}</td>
                           <td style={{ ...td, fontWeight: 600 }}>{r.nama}</td>
                           <td style={{ ...td, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{r.ket || (laporanBusy ? "…" : "-")}</td>
+                          {isCustom && <td style={td}><button style={styles.linkBtn} onClick={() => removeLaporanItem(laporanActive.id, r.mid)}>Hapus</button></td>}
                         </tr>
                       ))}
                     </tbody>
